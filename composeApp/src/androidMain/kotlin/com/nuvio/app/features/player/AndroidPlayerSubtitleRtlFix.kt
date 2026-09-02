@@ -18,19 +18,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             return cue
         }
 
-        if (containsArabic(text)) {
-            val fixed = wrapArabicLines(text)
-            if (fixed.contentEquals(text)) return cue
-            return cue.buildUpon().setText(fixed).build()
-        }
-
-        if (containsRtlChars(text)) {
-            val fixed = fixHebrewLines(text, isBuiltInSubtitle) ?: return cue
-            if (fixed.contentEquals(text)) return cue
-            return cue.buildUpon().setText(fixed).build()
-        }
-
-        return cue
+        // معالجة النصوص العربية والعبرية بنفس خوارزمية ضبط علامات الترقيم والأقواس
+        val fixed = fixRtlTextLines(text, isBuiltInSubtitle) ?: return cue
+        if (fixed.contentEquals(text)) return cue
+        return cue.buildUpon().setText(fixed).build()
     }
 
     fun fixTimedCues(
@@ -78,44 +69,39 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun wrapArabicLines(text: CharSequence): CharSequence {
+    private fun fixRtlTextLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
-        val lines = text.splitByNewlines()
-        for (i in lines.indices) {
-            if (i > 0) builder.append('\n')
-            val line = lines[i].stripDirectionalWrap()
-            if (line.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-            val hasCr = line[line.length - 1] == '\r'
-            val core = if (hasCr) line.subSequence(0, line.length - 1) else line
-            if (core.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-            builder.append('\u202B').append(core).append('\u202C')
-            if (hasCr) builder.append('\r')
-        }
-        return finishBuilder(builder)
-    }
-
-    private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
-        val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)
         val lines = text.splitByNewlines()
         var changed = false
         for (i in lines.indices) {
             if (i > 0) builder.append('\n')
-            val line = lines[i]
-            val fixed = if (isBuiltInSubtitle) {
-                moveLeadingRtlPunctuationToEndForBuiltIn(line, preserveSpans)
-            } else {
-                fixRtlPunctuationForLtr(line, preserveSpans)
+            val rawLine = lines[i].stripDirectionalWrap()
+            if (rawLine.isEmpty()) {
+                builder.append(rawLine)
+                continue
             }
-            if (fixed !== line && fixed.toString() != line.toString()) changed = true
-            builder.append(fixed)
+            val hasCr = rawLine[rawLine.length - 1] == '\r'
+            val core = if (hasCr) rawLine.subSequence(0, rawLine.length - 1) else rawLine
+            if (core.isEmpty()) {
+                builder.append(rawLine)
+                continue
+            }
+
+            // إصلاح علامات الترقيم والأقواس المقلوبة على أطراف السطر
+            val fixed = if (isBuiltInSubtitle) {
+                moveLeadingRtlPunctuationToEndForBuiltIn(core, preserveSpans)
+            } else {
+                fixRtlPunctuationForLtr(core, preserveSpans)
+            }
+
+            if (fixed !== core && fixed.toString() != core.toString()) {
+                changed = true
+            }
+
+            // إضافة محرف التوجيه RLM لضمان بقاء السطر متناسقاً
+            builder.append('\u200F').append(fixed).append('\u200F')
+            if (hasCr) builder.append('\r')
         }
         if (!changed) return null
         return finishBuilder(builder)
@@ -127,82 +113,21 @@ internal object AndroidPlayerSubtitleRtlFix {
         else -> builder.toString()
     }
 
-    private fun containsArabic(text: CharSequence): Boolean {
-        var i = 0
-        while (i < text.length) {
-            val codePoint = Character.codePointAt(text, i)
-            if (codePoint in 0x0600..0x06FF ||
-                codePoint in 0x0750..0x077F ||
-                codePoint in 0x0870..0x08FF ||
-                codePoint in 0xFB50..0xFDFF ||
-                codePoint in 0xFE70..0xFEFF ||
-                Character.getDirectionality(codePoint) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC
-            ) {
-                return true
-            }
-            i += Character.charCount(codePoint)
-        }
-        return false
-    }
-
     private fun mirrorPunctuation(c: Char): Char = when (c) {
         '(' -> ')'
         ')' -> '('
+        '[' -> ']'
+        ']' -> '['
+        '{' -> '}'
+        '}' -> '{'
+        '«' -> '»'
+        '»' -> '«'
         else -> c
-    }
-
-    private fun appendMirroredReversed(
-        out: Appendable,
-        line: CharSequence,
-        from: Int,
-        toExclusive: Int
-    ) {
-        if (from >= toExclusive) return
-
-        fun isNumberSeparator(c: Char) = c == ',' || c == ':' || c == '.' || c == '-'
-
-        val chunks = ArrayList<IntRange>()
-        var i = from
-        while (i < toExclusive) {
-            if (line[i].isDigit()) {
-                val start = i
-                i++
-                while (i < toExclusive) {
-                    if (line[i].isDigit()) {
-                        i++
-                    } else if (
-                        isNumberSeparator(line[i]) &&
-                        i + 1 < toExclusive &&
-                        line[i + 1].isDigit()
-                    ) {
-                        i++
-                    } else {
-                        break
-                    }
-                }
-                chunks.add(start until i)
-            } else {
-                chunks.add(i until i + 1)
-                i++
-            }
-        }
-
-        for (idx in chunks.indices.reversed()) {
-            val range = chunks[idx]
-            if (range.last - range.first + 1 > 1) {
-                out.append(line.subSequence(range.first, range.last + 1))
-            } else {
-                val c = line[range.first]
-                val m = mirrorPunctuation(c)
-                if (m != c) out.append(m) else out.append(line.subSequence(range.first, range.last + 1))
-            }
-        }
     }
 
     private fun fixRtlPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
         if (line.isEmpty()) return line
-        val hasCr = line[line.length - 1] == '\r'
-        val end0 = if (hasCr) line.length - 1 else line.length
+        val end0 = line.length
         if (end0 == 0) return line
 
         var start = 0
@@ -215,10 +140,11 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val out: Appendable =
             if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
+
+        // نقل علامات الترقيم التي ظهرت خطأ في بداية السطر إلى نهايته وعكس الأقواس
         appendMirroredReversed(out, line, end, end0)
         out.append(line.subSequence(start, end))
         appendMirroredReversed(out, line, 0, start)
-        if (hasCr) out.append('\r')
         return finishBuilder(out)
     }
 
@@ -227,8 +153,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         preserveSpans: Boolean
     ): CharSequence {
         if (line.isEmpty()) return line
-        val hasCr = line[line.length - 1] == '\r'
-        val end0 = if (hasCr) line.length - 1 else line.length
+        val end0 = line.length
         if (end0 == 0) return line
 
         var end = 0
@@ -239,8 +164,20 @@ internal object AndroidPlayerSubtitleRtlFix {
             if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
         out.append(line.subSequence(end, end0))
             .append(line.subSequence(0, end))
-        if (hasCr) out.append('\r')
         return finishBuilder(out)
+    }
+
+    private fun appendMirroredReversed(
+        out: Appendable,
+        line: CharSequence,
+        from: Int,
+        toExclusive: Int
+    ) {
+        if (from >= toExclusive) return
+        for (idx in (toExclusive - 1) downTo from) {
+            val c = line[idx]
+            out.append(mirrorPunctuation(c))
+        }
     }
 
     private fun CharSequence.stripDirectionalWrap(): CharSequence {
@@ -285,58 +222,25 @@ internal object AndroidPlayerSubtitleRtlFix {
         return ch in RTL_PUNCTUATION || ch.isWhitespace()
     }
 
-    private fun containsRtlChars(text: CharSequence): Boolean {
-        var i = 0
-        while (i < text.length) {
-            val codePoint = Character.codePointAt(text, i)
-
-            if (codePoint in 0x0590..0x05FF ||
-                codePoint in 0xFB1D..0xFB4F ||
-                codePoint in 0x0600..0x06FF ||
-                codePoint in 0x0750..0x077F ||
-                codePoint in 0x0870..0x08FF ||
-                codePoint in 0xFB50..0xFDFF ||
-                codePoint in 0xFE70..0xFEFF
-            ) {
-                return true
-            }
-
-            val d = Character.getDirectionality(codePoint)
-            if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
-                d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC ||
-                d == Character.DIRECTIONALITY_ARABIC_NUMBER
-            ) {
-                return true
-            }
-            i += Character.charCount(codePoint)
-        }
-        return false
-    }
-
     private fun hasAnyRtlCharacter(text: CharSequence): Boolean {
         var i = 0
         val len = text.length
         while (i < len) {
             val codePoint = Character.codePointAt(text, i)
-            if (codePoint >= 0x0590) {
-                if (codePoint in 0x0590..0x08FF ||
-                    codePoint in 0xFB1D..0xFEFF
-                ) {
-                    return true
-                }
-                val d = Character.getDirectionality(codePoint)
-                if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
-                    d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC ||
-                    d == Character.DIRECTIONALITY_ARABIC_NUMBER
-                ) {
-                    return true
-                }
+            if (codePoint in 0x0600..0x06FF ||
+                codePoint in 0x0750..0x077F ||
+                codePoint in 0x0870..0x08FF ||
+                codePoint in 0xFB50..0xFDFF ||
+                codePoint in 0xFE70..0xFEFF ||
+                codePoint in 0x0590..0x05FF
+            ) {
+                return true
             }
             i += Character.charCount(codePoint)
         }
         return false
     }
 
-    private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
-    private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
+    private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '[', ']', '{', '}', '«', '»', '\'', '"')
+    private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '[', ']', '{', '}', '«', '»')
 }
