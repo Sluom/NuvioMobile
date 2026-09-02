@@ -2207,7 +2207,7 @@ private class CueNormalizingTextOutput(
     }
 
     private fun processCue(cue: Cue): Cue? {
-        var processed = fixRtlCueText(cue)
+        var processed = AndroidPlayerSubtitleRtlFix.fixCueText(cue, isBuiltInSubtitle = true)
         if (shouldStripSdhProvider()) {
             val text = processed.text?.toString() ?: return processed
             val filtered = SubtitleSdhFilter.filter(text) ?: return null
@@ -2256,42 +2256,6 @@ private class CueNormalizingTextOutput(
             .setLine(Cue.DIMEN_UNSET, Cue.TYPE_UNSET)
             .setLineAnchor(Cue.TYPE_UNSET)
             .build()
-    }
-
-    private fun fixRtlCueText(cue: Cue): Cue {
-        val text = cue.text ?: return cue
-        if (!containsRtlChars(text)) return cue
-        val original = text.toString()
-        val fixed = original.split('\n').joinToString("\n") { line ->
-            moveLeadingRtlPunctuationToEnd(line)
-        }
-        if (fixed == original) return cue
-        return cue.buildUpon().setText(SpannableString(fixed)).build()
-    }
-
-    private fun moveLeadingRtlPunctuationToEnd(line: String): String {
-        if (line.isEmpty()) return line
-        var end = 0
-        while (end < line.length && line[end] in RTL_PUNCTUATION) end++
-        if (end == 0) return line
-        return line.substring(end) + line.substring(0, end)
-    }
-
-    private fun containsRtlChars(text: CharSequence): Boolean {
-        for (char in text) {
-            val directionality = Character.getDirectionality(char)
-            if (
-                directionality == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
-                directionality == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC
-            ) {
-                return true
-            }
-        }
-        return false
-    }
-
-    companion object {
-        private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
     }
 }
 
