@@ -11,9 +11,7 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    private const val RLE = '\u202B' // Right-to-Left Embedding (إجبار الاتجاه RTL)
-    private const val PDF = '\u202C' // Pop Directional Format (إنهاء عزل السطر)
-    private const val RLM = '\u200F' // Right-to-Left Mark (تثبيت محاذاة الرموز المحايدة)
+    private const val RLM = '\u200F'
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -73,7 +71,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun fixRtlLines(text: CharSequence): CharSequence? {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
         val lines = text.splitByNewlines()
         var changed = false
 
@@ -103,81 +101,74 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (end0 == 0) return line
 
         var rawStart = 0
-        while (rawStart < end0 && line[rawStart].isWhitespace()) {
-            rawStart++
-        }
+        while (rawStart < end0 && line[rawStart].isWhitespace()) rawStart++
         var rawEnd = end0
-        while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) {
-            rawEnd--
-        }
+        while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) rawEnd--
         if (rawStart >= rawEnd) return line
 
-        // 1. فحص شرطات الحوار المقلوبة في الطرف الأيسر (النهاية برمجياً)
+        // 1. معالجة شارحة الحوار المقلوبة في النهاية
         val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
-
-        // 2. فحص الرموز المقلوبة في البداية
-        var startPunctLen = 0
-        val isDialogStart = line[rawStart] == '-' && (rawStart + 1 == rawEnd || line[rawStart + 1].isWhitespace() || !isMalformedLeadingPunctuation(line[rawStart + 1]))
-
-        if (!isDialogStart && !isDialogEnd) {
-            while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(line[rawStart + startPunctLen])) {
-                startPunctLen++
-            }
-        }
-
-        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 10)
-
-        // تغليف السطر بالكامل داخل عازل اتجاهي قوي
-        out.append(RLE)
-
         if (isDialogEnd) {
+            val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 2)
             out.append("- ")
             var textEnd = rawEnd - 1
             while (textEnd > rawStart && (line[textEnd - 1] == '-' || line[textEnd - 1].isWhitespace())) {
                 textEnd--
             }
-            appendWithNeutralProtection(out, line, rawStart, textEnd)
-        } else {
-            val contentStart = rawStart + startPunctLen
-            appendWithNeutralProtection(out, line, contentStart, rawEnd)
+            out.append(line.subSequence(rawStart, textEnd))
+            if (hasCr) out.append('\r')
+            return finishBuilder(out)
+        }
 
-            if (startPunctLen > 0) {
-                out.append(RLM)
-                for (i in 0 until startPunctLen) {
-                    out.append(mirrorPunctuation(line[rawStart + i]))
-                }
+        // 2. فحص الرموز المقلوبة في البداية فقط (مع حماية - و ")
+        val isDialogStart = line[rawStart] == '-' && (rawStart + 1 == rawEnd || line[rawStart + 1].isWhitespace() || !isMalformedLeadingPunctuation(line[rawStart + 1]))
+        var startPunctLen = 0
+        if (!isDialogStart) {
+            while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(line[rawStart + startPunctLen])) {
+                startPunctLen++
             }
         }
 
-        // غلق العازل الاتجاهي للسطر
-        out.append(PDF)
-        if (hasCr) out.append('\r')
+        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 6)
 
+        // 3. تثبيت علامة الاقتباس إذا بدأت في أول السطر
+        var actualStart = rawStart + startPunctLen
+        if (startPunctLen == 0 && actualStart < rawEnd && (line[actualStart] == '"' || line[actualStart] == '“')) {
+            out.append(line[actualStart]).append(RLM)
+            actualStart++
+        }
+
+        if (startPunctLen > 0) {
+            out.append(line.subSequence(actualStart, rawEnd))
+            out.append(RLM)
+            for (i in 0 until startPunctLen) {
+                out.append(mirrorPunctuation(line[rawStart + i]))
+            }
+        } else {
+            // معالجة الأقواس ومنع ابتلاع التنقيط أو علامات الاقتباس: (جين).
+            var i = actualStart
+            while (i < rawEnd) {
+                val c = line[i]
+                out.append(c)
+                if (c == ')' && i + 1 < rawEnd && isTrailingAfterParen(line[i + 1])) {
+                    out.append(RLM)
+                }
+                i++
+            }
+
+            // تثبيت علامة الاقتباس إذا انتهى بها السطر (السطر الأول أو الثاني)
+            val lastChar = line[rawEnd - 1]
+            if (lastChar == '"' || lastChar == '”') {
+                out.append(RLM)
+            }
+        }
+
+        if (hasCr) out.append('\r')
         return finishBuilder(out)
     }
 
-    // حقن محرف التوجيه RLM بجانب الأقواس والاقتباسات والنقاط لضمان عدم ابتلاعها أو انعكاسها
-    private fun appendWithNeutralProtection(out: Appendable, line: CharSequence, from: Int, to: Int) {
-        var i = from
-        while (i < to) {
-            val c = line[i]
-            when (c) {
-                '"', '”', '“' -> {
-                    out.append(RLM).append(c).append(RLM)
-                }
-                ')' -> {
-                    // إذا كان القوس متبوعاً بنقطة أو فاصلة، نضع RLM بينهما لمنع انقلاب الترتيب
-                    out.append(c).append(RLM)
-                }
-                '(' -> {
-                    out.append(RLM).append(c)
-                }
-                else -> {
-                    out.append(c)
-                }
-            }
-            i++
-        }
+    private fun isTrailingAfterParen(c: Char): Boolean {
+        return c == '.' || c == '،' || c == ',' || c == '!' || c == '؟' || c == '?' || c == '"' || c == '”'
     }
 
     private fun fixHebrewPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
@@ -187,17 +178,11 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (end0 == 0) return line
 
         var start = 0
-        while (start < end0 && isHebrewPunctuation(line[start], isEnd = false)) {
-            start++
-        }
+        while (start < end0 && isHebrewPunctuation(line[start], isEnd = false)) start++
         var end = end0
-        while (end > start && isHebrewPunctuation(line[end - 1], isEnd = true)) {
-            end--
-        }
+        while (end > start && isHebrewPunctuation(line[end - 1], isEnd = true)) end--
 
-        if (start == 0 && end == end0) {
-            return line
-        }
+        if (start == 0 && end == end0) return line
 
         val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
         appendHebrewMirroredReversed(out, line, end, end0)
@@ -303,15 +288,11 @@ internal object AndroidPlayerSubtitleRtlFix {
         while (i < len) {
             val codePoint = Character.codePointAt(text, i)
             if (codePoint >= 0x0590) {
-                if (codePoint in 0x0590..0x08FF || codePoint in 0xFB1D..0xFEFF) {
-                    return true
-                }
+                if (codePoint in 0x0590..0x08FF || codePoint in 0xFB1D..0xFEFF) return true
                 val d = Character.getDirectionality(codePoint)
                 if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
                     d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC
-                ) {
-                    return true
-                }
+                ) return true
             }
             i += Character.charCount(codePoint)
         }
@@ -323,9 +304,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         val len = text.length
         while (i < len) {
             val codePoint = Character.codePointAt(text, i)
-            if (codePoint in 0x0590..0x05FF || codePoint in 0xFB1D..0xFB4F) {
-                return true
-            }
+            if (codePoint in 0x0590..0x05FF || codePoint in 0xFB1D..0xFB4F) return true
             i += Character.charCount(codePoint)
         }
         return false
