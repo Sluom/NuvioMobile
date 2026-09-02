@@ -11,10 +11,11 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    // محارف التوجيه القياسية الرسمية
-    private const val RLE = '\u202B' // Right-to-Left Embedding (بداية سياق RTL للسطر)
-    private const val PDF = '\u202C' // Pop Directional Format (نهاية سياق السطر)
-    private const val RLM = '\u200F' // محرف الفصل المخفي لمنع تداخل الرموز
+    private const val RLM = '\u200F'
+
+    // أقواس يونيكود صلبة الاتجاه لمنع ابتلاع النقطة نهائياً (الخيار 1)
+    private const val SOLID_OPEN_PAREN = '\uFF08'  // （
+    private const val SOLID_CLOSE_PAREN = '\uFF09' // ）
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -84,10 +85,10 @@ internal object AndroidPlayerSubtitleRtlFix {
 
             val fixed = when {
                 hasHebrewCharacters(line) -> fixHebrewPunctuationForLtr(line, preserveSpans)
-                else -> fixArabicLineDirect(line)
+                else -> fixArabicLine(line, preserveSpans)
             }
 
-            if (fixed.toString() != line.toString()) {
+            if (fixed !== line && fixed.toString() != line.toString()) {
                 changed = true
             }
             builder.append(fixed)
@@ -97,27 +98,89 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    private fun fixArabicLineDirect(line: CharSequence): CharSequence {
-        var str = line.toString().trim()
-        if (str.isEmpty()) return line
+    private fun fixArabicLine(line: CharSequence, preserveSpans: Boolean): CharSequence {
+        if (line.isEmpty()) return line
+        val hasCr = line[line.length - 1] == '\r'
+        val end0 = if (hasCr) line.length - 1 else line.length
+        if (end0 == 0) return line
 
-        // 1. إصلاح تداخل النقطة أو الفاصلة داخل القوس: (جين). أو (بيتو)!
-        // نضع محرف التوجيه المخفي مباشرة بعد القوس ليفصله عن التنقيط
-        str = str.replace(").", ")$RLM.")
-                 .replace(")،", ")$RLM،")
-                 .replace(")! ", ")$RLM! ")
-                 .replace(")!\"", ")$RLM!\"")
-                 .replace(")\"", ")$RLM\"")
+        var rawStart = 0
+        while (rawStart < end0 && line[rawStart].isWhitespace()) rawStart++
+        var rawEnd = end0
+        while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) rawEnd--
+        if (rawStart >= rawEnd) return line
 
-        // 2. إصلاح شرطة الحوار في بداية السطر
-        if (str.startsWith("-")) {
-            val content = str.removePrefix("-").trimStart()
-            str = "- $content"
+        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 16)
+
+        // 1. إعادة التعامل الأصلي المستقر مع شارحة الحوار المقلوبة في النهاية
+        val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
+        if (isDialogEnd) {
+            out.append("- ")
+            var textEnd = rawEnd - 1
+            while (textEnd > rawStart && (line[textEnd - 1] == '-' || line[textEnd - 1].isWhitespace())) {
+                textEnd--
+            }
+            processArabicContent(out, line, rawStart, textEnd)
+        } else {
+            // 2. إعادة التعامل الأصلي مع الرموز الشاذة المقلوبة في بداية السطر
+            val isDialogStart = line[rawStart] == '-'
+            var startPunctLen = 0
+            if (!isDialogStart) {
+                while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(line[rawStart + startPunctLen])) {
+                    startPunctLen++
+                }
+            }
+
+            if (startPunctLen > 0) {
+                processArabicContent(out, line, rawStart + startPunctLen, rawEnd)
+                out.append(RLM)
+                for (k in 0 until startPunctLen) {
+                    out.append(mirrorPunctuation(line[rawStart + k]))
+                }
+            } else {
+                processArabicContent(out, line, rawStart, rawEnd)
+            }
         }
 
-        // 3. تغليف السطر كاملاً داخل سياق RTL صريح ومغلق (RLE ... PDF)
-        // هذا يجبر أندرويد على احترام مكان علامات التعجب والاقتباس في نهاية السطر
-        return "$RLE$RLM$str$RLM$PDF"
+        if (hasCr) out.append('\r')
+        return finishBuilder(out)
+    }
+
+    private fun processArabicContent(out: Appendable, line: CharSequence, start: Int, end: Int) {
+        var i = start
+        while (i < end) {
+            val c = line[i]
+            when (c) {
+                // تطبيق الخيار (1): استبدال الأقواس بأقواس صلبة لا تسمح للنقطة بالدخول
+                '(' -> {
+                    out.append(SOLID_OPEN_PAREN)
+                }
+                ')' -> {
+                    out.append(SOLID_CLOSE_PAREN)
+                }
+
+                // القاعدة (2): إحاطة علامة التنصيص بالكامل لمنع قفزها
+                '"', '”', '“' -> {
+                    out.append(RLM).append(c).append(RLM)
+                }
+
+                // القاعدة (1): إحاطة علامة التعجب بالكامل لتثبيتها في جهة النص العربي
+                '!' -> {
+                    out.append(RLM).append(c).append(RLM)
+                }
+
+                // بقية الرموز (النقاط والفواصل والشارحة) تسير وفق سلوكها الأصلي المستقر
+                else -> {
+                    out.append(c)
+                }
+            }
+            i++
+        }
+    }
+
+    private fun isMalformedLeadingPunctuation(c: Char): Boolean {
+        return c == '.' || c == '،' || c == ',' || c == '؟' || c == '?' ||
+               c == ':' || c == ';' || c == '…'
     }
 
     private fun fixHebrewPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
