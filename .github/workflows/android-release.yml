@@ -1,4 +1,23 @@
-      - name: Create local.properties with Supabase Config
+name: Build Mobile Debug APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Create local.properties with Config
         run: |
           cat << 'EOF' > local.properties
           sdk.dir=$ANDROID_HOME
@@ -11,3 +30,15 @@
           TRAKT_CLIENT_SECRET=b65ce6d691bc350d32f74614ffdfa539da6dc31627c5db0db4855490fa96b4ef
           SIMKL_CLIENT_ID=42bcead71a82f3c0516fe3cfc23cb6e031eb58ceca1554fb9e44ffc26cb7ec7f
           EOF
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleFullDebug -Pnuvio.android.distribution=full --no-daemon
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nuvio-Mobile-Debug
+          path: androidApp/build/outputs/apk/full/debug/*.apk
