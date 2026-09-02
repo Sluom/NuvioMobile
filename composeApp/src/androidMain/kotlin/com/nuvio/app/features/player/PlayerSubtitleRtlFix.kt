@@ -11,7 +11,10 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object PlayerSubtitleRtlFix {
 
+    var isRtlEnabled: Boolean = true
+
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
+        if (!isRtlEnabled) return cue
         val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
             return cue
@@ -36,7 +39,7 @@ internal object PlayerSubtitleRtlFix {
         cues: List<CuesWithTiming>,
         isBuiltInSubtitle: Boolean = false
     ): List<CuesWithTiming> {
-        if (cues.isEmpty()) return cues
+        if (!isRtlEnabled || cues.isEmpty()) return cues
         var anyChanged = false
         val out = ArrayList<CuesWithTiming>(cues.size)
         for (entry in cues) {
@@ -193,7 +196,7 @@ internal object PlayerSubtitleRtlFix {
             } else {
                 val c = line[range.first]
                 val m = mirrorPunctuation(c)
-                if (m != c) out.append(m) else out.append(line.subSequence(range.first, range.first + 1))
+                if (m != c) out.append(m) else out.append(line.subSequence(range.first, range.last + 1))
             }
         }
     }
