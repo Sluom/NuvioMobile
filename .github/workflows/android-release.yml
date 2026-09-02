@@ -1,3 +1,22 @@
+name: Build Mobile Debug APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
       - name: Create local.properties with Config
         run: |
           cat << 'EOF' > local.properties
@@ -16,8 +35,10 @@
         run: chmod +x ./gradlew
 
       - name: Build Debug APK
-        env:
-          TRAKT_CLIENT_ID: 32598beebfa975878db6183fc691500dbdb9079a46a78ea30b7692be5a07c9fb
-          TRAKT_CLIENT_SECRET: b65ce6d691bc350d32f74614ffdfa539da6dc31627c5db0db4855490fa96b4ef
-          SIMKL_CLIENT_ID: 42bcead71a82f3c0516fe3cfc23cb6e031eb58ceca1554fb9e44ffc26cb7ec7f
-        run: ./gradlew assembleFullDebug -Pnuvio.android.distribution=full -PTRAKT_CLIENT_ID=32598beebfa975878db6183fc691500dbdb9079a46a78ea30b7692be5a07c9fb -PTRAKT_CLIENT_SECRET=b65ce6d691bc350d32f74614ffdfa539da6dc31627c5db0db4855490fa96b4ef -PSIMKL_CLIENT_ID=42bcead71a82f3c0516fe3cfc23cb6e031eb58ceca1554fb9e44ffc26cb7ec7f --no-daemon
+        run: ./gradlew assembleFullDebug -Pnuvio.android.distribution=full --no-daemon
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nuvio-Mobile-Debug
+          path: androidApp/build/outputs/apk/full/debug/*.apk
