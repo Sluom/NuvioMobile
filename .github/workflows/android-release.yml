@@ -1,23 +1,3 @@
-name: Build Mobile Debug APK
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
       - name: Create local.properties with Supabase Config
         run: |
           cat << 'EOF' > local.properties
@@ -27,16 +7,7 @@ jobs:
           NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI
           CONTRIBUTIONS_URL=https://gitserver.tapframe.space/api/unique-contributions
           IMDB_RATINGS_API_BASE_URL=https://imdb.tapframe.space/
+          TRAKT_CLIENT_ID=32598beebfa975878db6183fc691500dbdb9079a46a78ea30b7692be5a07c9fb
+          TRAKT_CLIENT_SECRET=b65ce6d691bc350d32f74614ffdfa539da6dc31627c5db0db4855490fa96b4ef
+          SIMKL_CLIENT_ID=42bcead71a82f3c0516fe3cfc23cb6e031eb58ceca1554fb9e44ffc26cb7ec7f
           EOF
-
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
-      - name: Build Debug APK
-        run: ./gradlew assembleFullDebug -Pnuvio.android.distribution=full --no-daemon
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Nuvio-Mobile-Debug
-          path: "**/*.apk"
