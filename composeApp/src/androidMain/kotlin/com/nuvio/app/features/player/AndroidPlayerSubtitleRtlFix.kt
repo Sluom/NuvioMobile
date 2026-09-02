@@ -11,7 +11,9 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    private const val RLM = '\u200F'
+    private const val RLE = '\u202B' // Right-to-Left Embedding (إجبار الاتجاه RTL)
+    private const val PDF = '\u202C' // Pop Directional Format (إنهاء عزل السطر)
+    private const val RLM = '\u200F' // Right-to-Left Mark (تثبيت محاذاة الرموز المحايدة)
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -71,7 +73,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun fixRtlLines(text: CharSequence): CharSequence? {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
         val lines = text.splitByNewlines()
         var changed = false
 
@@ -100,90 +102,82 @@ internal object AndroidPlayerSubtitleRtlFix {
         val end0 = if (hasCr) line.length - 1 else line.length
         if (end0 == 0) return line
 
-        var lastIdx = end0 - 1
-        while (lastIdx >= 0 && line[lastIdx].isWhitespace()) {
-            lastIdx--
+        var rawStart = 0
+        while (rawStart < end0 && line[rawStart].isWhitespace()) {
+            rawStart++
         }
-        if (lastIdx < 0) return line
-
-        var startIdx = 0
-        while (startIdx < end0 && line[startIdx].isWhitespace()) {
-            startIdx++
+        var rawEnd = end0
+        while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) {
+            rawEnd--
         }
+        if (rawStart >= rawEnd) return line
 
-        // 1. معالجة تداخل النقطة/التنصيص داخل القوس الطرفي مثل (توني.)
-        val normalizedLine = fixParenthesisPunctuationLeak(line, startIdx, end0, preserveSpans)
+        // 1. فحص شرطات الحوار المقلوبة في الطرف الأيسر (النهاية برمجياً)
+        val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
 
-        // 2. فحص صمامات الأمان
-        val hasDefiniteEnding = isTerminalPunctuation(normalizedLine[normalizedLine.length - 1])
-        val isDialogStart = normalizedLine[0] == '-' && normalizedLine.length > 1 &&
-                (normalizedLine[1].isWhitespace() || !isMalformedLeadingPunctuation(normalizedLine[1]))
-
+        // 2. فحص الرموز المقلوبة في البداية
         var startPunctLen = 0
-        if (!isDialogStart) {
-            while (startPunctLen < normalizedLine.length && isMalformedLeadingPunctuation(normalizedLine[startPunctLen])) {
+        val isDialogStart = line[rawStart] == '-' && (rawStart + 1 == rawEnd || line[rawStart + 1].isWhitespace() || !isMalformedLeadingPunctuation(line[rawStart + 1]))
+
+        if (!isDialogStart && !isDialogEnd) {
+            while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(line[rawStart + startPunctLen])) {
                 startPunctLen++
             }
         }
 
-        // سطر سليم تماماً
-        if (hasDefiniteEnding && startPunctLen == 0) {
-            val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(normalizedLine.length + 1)
-            out.append(RLM).append(normalizedLine)
-            if (hasCr) out.append('\r')
-            return finishBuilder(out)
-        }
+        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 10)
 
-        // 3. معالجة علامات الاقتباس الطرفية المنفصلة على سطرين أو الأسطر المقلوبة
-        val isDialogEnd = normalizedLine[normalizedLine.length - 1] == '-' && normalizedLine.length > 1 && normalizedLine[normalizedLine.length - 2].isWhitespace()
-
-        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(normalizedLine.length + 4)
-        out.append(RLM)
+        // تغليف السطر بالكامل داخل عازل اتجاهي قوي
+        out.append(RLE)
 
         if (isDialogEnd) {
             out.append("- ")
-            var textEnd = normalizedLine.length - 1
-            while (textEnd > 0 && (normalizedLine[textEnd - 1] == '-' || normalizedLine[textEnd - 1].isWhitespace())) {
+            var textEnd = rawEnd - 1
+            while (textEnd > rawStart && (line[textEnd - 1] == '-' || line[textEnd - 1].isWhitespace())) {
                 textEnd--
             }
-            out.append(normalizedLine.subSequence(startPunctLen, textEnd))
+            appendWithNeutralProtection(out, line, rawStart, textEnd)
         } else {
-            out.append(normalizedLine.subSequence(startPunctLen, normalizedLine.length))
-        }
+            val contentStart = rawStart + startPunctLen
+            appendWithNeutralProtection(out, line, contentStart, rawEnd)
 
-        // نقل الرموز الشاذة من البداية للنهاية مع عزلها بـ RLM
-        if (startPunctLen > 0) {
-            out.append(RLM)
-            for (i in 0 until startPunctLen) {
-                out.append(mirrorPunctuation(normalizedLine[i]))
+            if (startPunctLen > 0) {
+                out.append(RLM)
+                for (i in 0 until startPunctLen) {
+                    out.append(mirrorPunctuation(line[rawStart + i]))
+                }
             }
         }
 
+        // غلق العازل الاتجاهي للسطر
+        out.append(PDF)
         if (hasCr) out.append('\r')
+
         return finishBuilder(out)
     }
 
-    // إصلاح منع ابتلاع القوس للنقطة أو الفاصلة أو علامة التنصيص: (توني.) -> (توني).
-    private fun fixParenthesisPunctuationLeak(
-        line: CharSequence,
-        start: Int,
-        end: Int,
-        preserveSpans: Boolean
-    ): CharSequence {
-        val s = line.subSequence(start, end).toString()
-        // تصحيح النقطة/التنصيص التي تقع خطأً قبل إغلاق القوس في أواخر الكلمات
-        val regex = Regex("""\(([^)]+?)([\.\,\!؟\?"”])\)""")
-        if (regex.containsMatchIn(s)) {
-            val replaced = regex.replace(s) { matchResult ->
-                val content = matchResult.groupValues[1]
-                val punct = matchResult.groupValues[2]
-                "($content)$RLM$punct"
+    // حقن محرف التوجيه RLM بجانب الأقواس والاقتباسات والنقاط لضمان عدم ابتلاعها أو انعكاسها
+    private fun appendWithNeutralProtection(out: Appendable, line: CharSequence, from: Int, to: Int) {
+        var i = from
+        while (i < to) {
+            val c = line[i]
+            when (c) {
+                '"', '”', '“' -> {
+                    out.append(RLM).append(c).append(RLM)
+                }
+                ')' -> {
+                    // إذا كان القوس متبوعاً بنقطة أو فاصلة، نضع RLM بينهما لمنع انقلاب الترتيب
+                    out.append(c).append(RLM)
+                }
+                '(' -> {
+                    out.append(RLM).append(c)
+                }
+                else -> {
+                    out.append(c)
+                }
             }
-            val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(replaced.length)
-            out.append(replaced)
-            return finishBuilder(out)
+            i++
         }
-        return line.subSequence(start, end)
     }
 
     private fun fixHebrewPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
@@ -212,10 +206,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (hasCr) out.append('\r')
 
         return finishBuilder(out)
-    }
-
-    private fun isTerminalPunctuation(c: Char): Boolean {
-        return c == '.' || c == '؟' || c == '?' || c == '!' || c == '…' || c == ':' || c == ';' || c == '"' || c == '”'
     }
 
     private fun isMalformedLeadingPunctuation(c: Char): Boolean {
