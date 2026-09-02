@@ -12,8 +12,8 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     private const val RLM = '\u200F'
-    private const val HAIR_SPACE = '\u200A' // مسافة شعرية ضئيلة جداً لكسر رابط النقطة بالقوس (الرقم 5)
-    private const val ARABIC_TATWEEL = '\u0640' // محرف عربي أصيل لتثبيت نهاية السطر كعربي صريح (الرقم 4)
+    // حرف عربي صريح بقوة اتجاهية تامة (Strong RTL) لتثبيت علامة التنصيص
+    private const val ARABIC_LETTER_MARK = '\u061C' 
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -110,7 +110,6 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 16)
 
-        // 1. استقرار شارحة الحوار كما هي
         val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
         if (isDialogEnd) {
             out.append("- ")
@@ -145,48 +144,15 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun processArabicContent(out: Appendable, line: CharSequence, start: Int, end: Int) {
         var i = start
-        var openQuote = true // تتبع فتح وإغلاق علامات الاقتباس لتحويلها إلى « و »
-
         while (i < end) {
             val c = line[i]
-
-            when {
-                // الرقم (5): حل (جين.) و "جين." باستخدام المسافة الشعرية الضئيلة Hair Space
-                (c == ')' || c == '"' || c == '”' || c == '»') && (i + 1 < end && line[i + 1] == '.') -> {
-                    if (c == '"' || c == '”') {
-                        out.append('»')
-                        openQuote = true
-                    } else {
-                        out.append(c)
-                    }
-                    out.append(HAIR_SPACE) // يفصل النقطة طباعياً فيمنع ابتلاعها دون تشويه
+            when (c) {
+                // النقطة الثانية: تثبيت علامة التنصيص الأصلية " برمز عربي قوي أصيل لمنع قفزها
+                '"', '”', '“' -> {
+                    out.append(ARABIC_LETTER_MARK).append('"').append(ARABIC_LETTER_MARK)
                 }
 
-                // الأقواس القياسية الطبيعية: الحفاظ على شكلها الأصلي
-                c == '(' || c == ')' -> {
-                    out.append(c)
-                }
-
-                // الرقم (1): استبدال " و ” بعلامات التنصيص العربية الأصيلة « و »
-                c == '"' || c == '”' || c == '“' -> {
-                    if (openQuote) {
-                        out.append('«')
-                        openQuote = false
-                    } else {
-                        out.append('»')
-                        openQuote = true
-                    }
-                }
-
-                // الرقم (4): تثبيت علامة التعجب ! كرمز عربي صريح ومنع قفزها
-                c == '!' -> {
-                    out.append('!')
-                    // إذا وقعت علامة التعجب في نهاية المقطع يتم تثبيتها برمز عربي صريح لمنع قفزها لليمين
-                    if (i + 1 == end || (i + 1 < end && (line[i + 1] == ' ' || line[i + 1] == '-'))) {
-                        out.append(RLM).append(ARABIC_TATWEEL).append(RLM)
-                    }
-                }
-
+                // بقية الرموز (الأقواس، النقاط، علامات التعجب) عادت بالكامل لحالتها الطبيعية الأصلية
                 else -> {
                     out.append(c)
                 }
@@ -234,8 +200,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         ']' -> '['
         '{' -> '}'
         '}' -> '{'
-        '«' -> '»'
-        '»' -> '«'
         else -> c
     }
 
@@ -336,5 +300,5 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    private val HEBREW_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '[', ']', '{', '}', '\'', '"', '«', '»') + ('0'..'9')
+    private val HEBREW_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '[', ']', '{', '}', '\'', '"') + ('0'..'9')
 }
