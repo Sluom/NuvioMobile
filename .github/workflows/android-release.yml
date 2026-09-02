@@ -18,15 +18,22 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Create dummy local.properties
+      - name: Create local.properties with Supabase Config
         run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          cat << 'EOF' > local.properties
+          sdk.dir=$ANDROID_HOME
+          NUVIO_SUPABASE_URL=https://api-two.nuvioapp.space
+          NUVIO_SUPABASE_FALLBACK_URL=https://api.nuvio.tv
+          NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI
+          CONTRIBUTIONS_URL=https://gitserver.tapframe.space/api/unique-contributions
+          IMDB_RATINGS_API_BASE_URL=https://imdb.tapframe.space/
+          EOF
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleFullDebug -Pnuvio.android.distribution=full --no-daemon --stacktrace
+        run: ./gradlew assembleFullDebug -Pnuvio.android.distribution=full --no-daemon
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
