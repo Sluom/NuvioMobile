@@ -4,8 +4,6 @@ package com.nuvio.app.features.player
 
 import android.text.SpannableStringBuilder
 import android.text.Spanned
-import androidx.core.text.BidiFormatter
-import androidx.core.text.TextDirectionHeuristicsCompat
 import androidx.media3.common.C
 import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
@@ -13,10 +11,10 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    private const val RLM = '\u200F'
-    private val bidiFormatter: BidiFormatter = BidiFormatter.Builder(true)
-        .setTextDirectionHeuristic(TextDirectionHeuristicsCompat.RTL)
-        .build()
+    // محارف التوجيه القياسية الرسمية
+    private const val RLE = '\u202B' // Right-to-Left Embedding (بداية سياق RTL للسطر)
+    private const val PDF = '\u202C' // Pop Directional Format (نهاية سياق السطر)
+    private const val RLM = '\u200F' // محرف الفصل المخفي لمنع تداخل الرموز
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -77,7 +75,7 @@ internal object AndroidPlayerSubtitleRtlFix {
     private fun fixRtlLines(text: CharSequence): CharSequence? {
         val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 32)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
         var changed = false
 
         for (i in lines.indices) {
@@ -86,7 +84,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
             val fixed = when {
                 hasHebrewCharacters(line) -> fixHebrewPunctuationForLtr(line, preserveSpans)
-                else -> fixArabicLine(line)
+                else -> fixArabicLineDirect(line)
             }
 
             if (fixed.toString() != line.toString()) {
@@ -99,41 +97,27 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    private fun fixArabicLine(line: CharSequence): CharSequence {
+    private fun fixArabicLineDirect(line: CharSequence): CharSequence {
         var str = line.toString().trim()
         if (str.isEmpty()) return line
 
-        // 1. إصلاح شرطات الحوار (- كلمة) لتثبيتها في البداية يميناً
+        // 1. إصلاح تداخل النقطة أو الفاصلة داخل القوس: (جين). أو (بيتو)!
+        // نضع محرف التوجيه المخفي مباشرة بعد القوس ليفصله عن التنقيط
+        str = str.replace(").", ")$RLM.")
+                 .replace(")،", ")$RLM،")
+                 .replace(")! ", ")$RLM! ")
+                 .replace(")!\"", ")$RLM!\"")
+                 .replace(")\"", ")$RLM\"")
+
+        // 2. إصلاح شرطة الحوار في بداية السطر
         if (str.startsWith("-")) {
-            str = str.removePrefix("-").trimStart()
-            str = "- $str"
-        } else if (str.endsWith("-")) {
-            str = str.removeSuffix("-").trimEnd()
-            str = "- $str"
+            val content = str.removePrefix("-").trimStart()
+            str = "- $content"
         }
 
-        // 2. إصلاح تداخل الأقواس مع التنصيص المشوه: (بيتو") تحول إلى "(بيتو)"
-        str = str.replace(Regex("""\(([^()]+)"\)"""), "\"($1)\"")
-        str = str.replace(Regex("""\("([^()]+)\)"""), "\"($1)\"")
-
-        // 3. إصلاح النقطة أو الفاصلة بعد القوس: (جين). أو (جين)،
-        str = str.replace(Regex("""\)([\.\،\,\!\؟\?])"""), ")$RLM$1")
-
-        // 4. إصلاح علامة التنصيص في أطراف السطر
-        if (str.startsWith("\"")) {
-            str = "$RLM\"" + str.substring(1)
-        }
-        if (str.endsWith("\"")) {
-            str = str.substring(0, str.length - 1) + "\"$RLM"
-        }
-
-        // 5. إصلاح علامة التعجب والنقطة في نهاية السطر
-        if (str.endsWith("!") || str.endsWith(".")) {
-            str = "$str$RLM"
-        }
-
-        // 6. تغليف السطر عبر محرك أندرويد الرسمي المخصص لفرض اتجاه اليمين لليسار
-        return bidiFormatter.unicodeWrap(str, TextDirectionHeuristicsCompat.RTL)
+        // 3. تغليف السطر كاملاً داخل سياق RTL صريح ومغلق (RLE ... PDF)
+        // هذا يجبر أندرويد على احترام مكان علامات التعجب والاقتباس في نهاية السطر
+        return "$RLE$RLM$str$RLM$PDF"
     }
 
     private fun fixHebrewPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
