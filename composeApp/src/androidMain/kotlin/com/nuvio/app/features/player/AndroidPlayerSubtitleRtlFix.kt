@@ -4,6 +4,8 @@ package com.nuvio.app.features.player
 
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import androidx.core.text.BidiFormatter
+import androidx.core.text.TextDirectionHeuristicsCompat
 import androidx.media3.common.C
 import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
@@ -11,9 +13,10 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    private const val RLI = '\u2067' // Right-to-Left Isolate
-    private const val PDI = '\u2069' // Pop Directional Isolate
-    private const val RLM = '\u200F' // Right-to-Left Mark
+    private const val RLM = '\u200F'
+    private val bidiFormatter: BidiFormatter = BidiFormatter.Builder(true)
+        .setTextDirectionHeuristic(TextDirectionHeuristicsCompat.RTL)
+        .build()
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -73,8 +76,8 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun fixRtlLines(text: CharSequence): CharSequence? {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
         val lines = text.splitByNewlines()
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 32)
         var changed = false
 
         for (i in lines.indices) {
@@ -83,10 +86,10 @@ internal object AndroidPlayerSubtitleRtlFix {
 
             val fixed = when {
                 hasHebrewCharacters(line) -> fixHebrewPunctuationForLtr(line, preserveSpans)
-                else -> fixArabicLine(line, preserveSpans)
+                else -> fixArabicLine(line)
             }
 
-            if (fixed !== line && fixed.toString() != line.toString()) {
+            if (fixed.toString() != line.toString()) {
                 changed = true
             }
             builder.append(fixed)
@@ -96,91 +99,41 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    private fun fixArabicLine(line: CharSequence, preserveSpans: Boolean): CharSequence {
-        if (line.isEmpty()) return line
-        val hasCr = line[line.length - 1] == '\r'
-        val end0 = if (hasCr) line.length - 1 else line.length
-        if (end0 == 0) return line
+    private fun fixArabicLine(line: CharSequence): CharSequence {
+        var str = line.toString().trim()
+        if (str.isEmpty()) return line
 
-        var rawStart = 0
-        while (rawStart < end0 && line[rawStart].isWhitespace()) rawStart++
-        var rawEnd = end0
-        while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) rawEnd--
-        if (rawStart >= rawEnd) return line
-
-        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 12)
-
-        // عزل السطر بالكامل ككتلة RTL مغلقة ومحمية
-        out.append(RLI)
-        out.append(RLM)
-
-        // 1. معالجة شارحة الحوار المقلوبة في الطرف الآخر
-        val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
-        if (isDialogEnd) {
-            out.append("- ")
-            var textEnd = rawEnd - 1
-            while (textEnd > rawStart && (line[textEnd - 1] == '-' || line[textEnd - 1].isWhitespace())) {
-                textEnd--
-            }
-            processContentTokens(out, line, rawStart, textEnd)
-        } else {
-            // 2. فحص الرموز المقلوبة التي تم حشرها في أول السطر عن طريق الخطأ
-            val isDialogStart = line[rawStart] == '-'
-            var startPunctLen = 0
-            if (!isDialogStart) {
-                while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(line[rawStart + startPunctLen])) {
-                    startPunctLen++
-                }
-            }
-
-            if (startPunctLen > 0) {
-                processContentTokens(out, line, rawStart + startPunctLen, rawEnd)
-                out.append(RLM)
-                for (k in 0 until startPunctLen) {
-                    out.append(mirrorPunctuation(line[rawStart + k]))
-                }
-            } else {
-                processContentTokens(out, line, rawStart, rawEnd)
-            }
+        // 1. إصلاح شرطات الحوار (- كلمة) لتثبيتها في البداية يميناً
+        if (str.startsWith("-")) {
+            str = str.removePrefix("-").trimStart()
+            str = "- $str"
+        } else if (str.endsWith("-")) {
+            str = str.removeSuffix("-").trimEnd()
+            str = "- $str"
         }
 
-        out.append(RLM)
-        out.append(PDI)
-        if (hasCr) out.append('\r')
+        // 2. إصلاح تداخل الأقواس مع التنصيص المشوه: (بيتو") تحول إلى "(بيتو)"
+        str = str.replace(Regex("""\(([^()]+)"\)"""), "\"($1)\"")
+        str = str.replace(Regex("""\("([^()]+)\)"""), "\"($1)\"")
 
-        return finishBuilder(out)
-    }
+        // 3. إصلاح النقطة أو الفاصلة بعد القوس: (جين). أو (جين)،
+        str = str.replace(Regex("""\)([\.\،\,\!\؟\?])"""), ")$RLM$1")
 
-    private fun processContentTokens(out: Appendable, line: CharSequence, start: Int, end: Int) {
-        var i = start
-        while (i < end) {
-            val c = line[i]
-            when (c) {
-                // تثبيت علامة الاقتباس لحمايتها من القفز للطرف الآخر
-                '"', '”', '“' -> {
-                    out.append(c).append(RLM)
-                }
-                // تثبيت القوس ومنع ابتلاع علامات الترقيم داخله
-                ')' -> {
-                    out.append(c)
-                    if (i + 1 < end && isTrailingAfterParen(line[i + 1])) {
-                        out.append(RLM)
-                    }
-                }
-                // شارحة الحوار في بداية السطر
-                '-' -> {
-                    out.append(c).append(RLM)
-                }
-                else -> {
-                    out.append(c)
-                }
-            }
-            i++
+        // 4. إصلاح علامة التنصيص في أطراف السطر
+        if (str.startsWith("\"")) {
+            str = "$RLM\"" + str.substring(1)
         }
-    }
+        if (str.endsWith("\"")) {
+            str = str.substring(0, str.length - 1) + "\"$RLM"
+        }
 
-    private fun isTrailingAfterParen(c: Char): Boolean {
-        return c == '.' || c == '،' || c == ',' || c == '!' || c == '؟' || c == '?' || c == '"' || c == '”'
+        // 5. إصلاح علامة التعجب والنقطة في نهاية السطر
+        if (str.endsWith("!") || str.endsWith(".")) {
+            str = "$str$RLM"
+        }
+
+        // 6. تغليف السطر عبر محرك أندرويد الرسمي المخصص لفرض اتجاه اليمين لليسار
+        return bidiFormatter.unicodeWrap(str, TextDirectionHeuristicsCompat.RTL)
     }
 
     private fun fixHebrewPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
@@ -203,11 +156,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (hasCr) out.append('\r')
 
         return finishBuilder(out)
-    }
-
-    private fun isMalformedLeadingPunctuation(c: Char): Boolean {
-        return c == '.' || c == '،' || c == ',' || c == '؟' || c == '?' || c == '!' ||
-               c == ':' || c == ';' || c == '…' || c == ')' || c == '(' || c == ']' || c == '['
     }
 
     private fun isHebrewPunctuation(ch: Char, isEnd: Boolean): Boolean {
