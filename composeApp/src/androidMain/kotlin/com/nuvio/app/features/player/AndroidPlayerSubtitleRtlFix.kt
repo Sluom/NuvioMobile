@@ -12,10 +12,10 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     private const val RLM = '\u200F'
-
-    // أقواس يونيكود صلبة الاتجاه لمنع ابتلاع النقطة نهائياً (الخيار 1)
-    private const val SOLID_OPEN_PAREN = '\uFF08'  // （
-    private const val SOLID_CLOSE_PAREN = '\uFF09' // ）
+    private const val ZWNJ = '\u200C' // فاصل صفري غير مرئي لمنع ابتلاع النقطة
+    private const val ZWJ = '\u200D'  // رابط صفري غير مرئي لتثبيت علامة التعجب بالكلمة
+    private const val FSI = '\u2068'  // بادئة عزل اتجاهي موضعي لعلامة الاقتباس
+    private const val PDI = '\u2069'  // خاتمة عزل اتجاهي موضعي لعلامة الاقتباس
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -112,7 +112,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 16)
 
-        // 1. إعادة التعامل الأصلي المستقر مع شارحة الحوار المقلوبة في النهاية
+        // 1. معالجة شارحة الحوار المستقرة السابقة كما هي
         val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
         if (isDialogEnd) {
             out.append("- ")
@@ -122,7 +122,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             processArabicContent(out, line, rawStart, textEnd)
         } else {
-            // 2. إعادة التعامل الأصلي مع الرموز الشاذة المقلوبة في بداية السطر
             val isDialogStart = line[rawStart] == '-'
             var startPunctLen = 0
             if (!isDialogStart) {
@@ -150,26 +149,29 @@ internal object AndroidPlayerSubtitleRtlFix {
         var i = start
         while (i < end) {
             val c = line[i]
-            when (c) {
-                // تطبيق الخيار (1): استبدال الأقواس بأقواس صلبة لا تسمح للنقطة بالدخول
-                '(' -> {
-                    out.append(SOLID_OPEN_PAREN)
-                }
-                ')' -> {
-                    out.append(SOLID_CLOSE_PAREN)
+            when {
+                // النقطة المرجعية (3): حل حالة (جين.) و "جين." باستخدام ZWNJ الفاصل المشروط
+                (c == ')' || c == '"' || c == '”') && (i + 1 < end && line[i + 1] == '.') -> {
+                    out.append(c)
+                    out.append(ZWNJ) // يمنع النقطة من الدخول دون أي تشويه للأقواس العادية
                 }
 
-                // القاعدة (2): إحاطة علامة التنصيص بالكامل لمنع قفزها
-                '"', '”', '“' -> {
-                    out.append(RLM).append(c).append(RLM)
+                // الأقواس القياسية الطبيعية: العودة إليها دون أي توسيع أو أشكال شاذة
+                c == '(' || c == ')' -> {
+                    out.append(c)
                 }
 
-                // القاعدة (1): إحاطة علامة التعجب بالكامل لتثبيتها في جهة النص العربي
-                '!' -> {
-                    out.append(RLM).append(c).append(RLM)
+                // النقطة المرجعية (2): علامة التنصيص بعزل اتجاهي موضعي FSI/PDI
+                c == '"' || c == '”' || c == '“' -> {
+                    out.append(FSI).append(c).append(PDI)
                 }
 
-                // بقية الرموز (النقاط والفواصل والشارحة) تسير وفق سلوكها الأصلي المستقر
+                // النقطة المرجعية (3): علامة التعجب مربوطة بالكلمة عبر واصلة ربط صفرية ZWJ
+                c == '!' -> {
+                    out.append(ZWJ).append('!')
+                }
+
+                // بقية الرموز (النقاط العادية والفواصل) تسير وفق سلوكها الأصلي دون مساس
                 else -> {
                     out.append(c)
                 }
