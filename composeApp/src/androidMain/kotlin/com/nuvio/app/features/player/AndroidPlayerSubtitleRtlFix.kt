@@ -12,10 +12,8 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     private const val RLM = '\u200F'
-    private const val ZWNJ = '\u200C' // فاصل صفري غير مرئي لمنع ابتلاع النقطة
-    private const val ZWJ = '\u200D'  // رابط صفري غير مرئي لتثبيت علامة التعجب بالكلمة
-    private const val FSI = '\u2068'  // بادئة عزل اتجاهي موضعي لعلامة الاقتباس
-    private const val PDI = '\u2069'  // خاتمة عزل اتجاهي موضعي لعلامة الاقتباس
+    private const val HAIR_SPACE = '\u200A' // مسافة شعرية ضئيلة جداً لكسر رابط النقطة بالقوس (الرقم 5)
+    private const val ARABIC_TATWEEL = '\u0640' // محرف عربي أصيل لتثبيت نهاية السطر كعربي صريح (الرقم 4)
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -112,7 +110,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 16)
 
-        // 1. معالجة شارحة الحوار المستقرة السابقة كما هي
+        // 1. استقرار شارحة الحوار كما هي
         val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
         if (isDialogEnd) {
             out.append("- ")
@@ -147,31 +145,48 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun processArabicContent(out: Appendable, line: CharSequence, start: Int, end: Int) {
         var i = start
+        var openQuote = true // تتبع فتح وإغلاق علامات الاقتباس لتحويلها إلى « و »
+
         while (i < end) {
             val c = line[i]
+
             when {
-                // النقطة المرجعية (3): حل حالة (جين.) و "جين." باستخدام ZWNJ الفاصل المشروط
-                (c == ')' || c == '"' || c == '”') && (i + 1 < end && line[i + 1] == '.') -> {
-                    out.append(c)
-                    out.append(ZWNJ) // يمنع النقطة من الدخول دون أي تشويه للأقواس العادية
+                // الرقم (5): حل (جين.) و "جين." باستخدام المسافة الشعرية الضئيلة Hair Space
+                (c == ')' || c == '"' || c == '”' || c == '»') && (i + 1 < end && line[i + 1] == '.') -> {
+                    if (c == '"' || c == '”') {
+                        out.append('»')
+                        openQuote = true
+                    } else {
+                        out.append(c)
+                    }
+                    out.append(HAIR_SPACE) // يفصل النقطة طباعياً فيمنع ابتلاعها دون تشويه
                 }
 
-                // الأقواس القياسية الطبيعية: العودة إليها دون أي توسيع أو أشكال شاذة
+                // الأقواس القياسية الطبيعية: الحفاظ على شكلها الأصلي
                 c == '(' || c == ')' -> {
                     out.append(c)
                 }
 
-                // النقطة المرجعية (2): علامة التنصيص بعزل اتجاهي موضعي FSI/PDI
+                // الرقم (1): استبدال " و ” بعلامات التنصيص العربية الأصيلة « و »
                 c == '"' || c == '”' || c == '“' -> {
-                    out.append(FSI).append(c).append(PDI)
+                    if (openQuote) {
+                        out.append('«')
+                        openQuote = false
+                    } else {
+                        out.append('»')
+                        openQuote = true
+                    }
                 }
 
-                // النقطة المرجعية (3): علامة التعجب مربوطة بالكلمة عبر واصلة ربط صفرية ZWJ
+                // الرقم (4): تثبيت علامة التعجب ! كرمز عربي صريح ومنع قفزها
                 c == '!' -> {
-                    out.append(ZWJ).append('!')
+                    out.append('!')
+                    // إذا وقعت علامة التعجب في نهاية المقطع يتم تثبيتها برمز عربي صريح لمنع قفزها لليمين
+                    if (i + 1 == end || (i + 1 < end && (line[i + 1] == ' ' || line[i + 1] == '-'))) {
+                        out.append(RLM).append(ARABIC_TATWEEL).append(RLM)
+                    }
                 }
 
-                // بقية الرموز (النقاط العادية والفواصل) تسير وفق سلوكها الأصلي دون مساس
                 else -> {
                     out.append(c)
                 }
@@ -219,6 +234,8 @@ internal object AndroidPlayerSubtitleRtlFix {
         ']' -> '['
         '{' -> '}'
         '}' -> '{'
+        '«' -> '»'
+        '»' -> '«'
         else -> c
     }
 
@@ -319,5 +336,5 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    private val HEBREW_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '[', ']', '{', '}', '\'', '"') + ('0'..'9')
+    private val HEBREW_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '[', ']', '{', '}', '\'', '"', '«', '»') + ('0'..'9')
 }
