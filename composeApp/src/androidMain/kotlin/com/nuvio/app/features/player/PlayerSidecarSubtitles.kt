@@ -197,7 +197,7 @@ internal fun parseSidecarTimedCuesRobust(rawText: String, sourceUrl: String): Si
     for (mime in candidates) {
         val parsed = parseSidecarTimedCuesWithMime(cleaned, mime)
         if (parsed.isNotEmpty()) {
-            val fixed = PlayerSubtitleRtlFix.fixTimedCues(parsed, isBuiltInSubtitle = false)
+            val fixed = AndroidPlayerSubtitleRtlFix.fixTimedCues(parsed, isBuiltInSubtitle = false)
             val normalized = if (mime == MimeTypes.TEXT_VTT) normalizeTimedCuePositions(fixed) else fixed
             return SidecarParseResult(
                 normalized,
@@ -214,7 +214,7 @@ internal fun parseSidecarTimedCuesRobust(rawText: String, sourceUrl: String): Si
         parseSidecarTimedCuesLenient(cleaned, sourceUrl)
     }
     if (lenient.isNotEmpty()) {
-        val fixed = PlayerSubtitleRtlFix.fixTimedCues(lenient, isBuiltInSubtitle = false)
+        val fixed = AndroidPlayerSubtitleRtlFix.fixTimedCues(lenient, isBuiltInSubtitle = false)
         val normalized = if (sniffedMime == MimeTypes.TEXT_VTT) normalizeTimedCuePositions(fixed) else fixed
         return SidecarParseResult(
             normalized,
