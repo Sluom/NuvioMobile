@@ -11,7 +11,9 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    private const val RLM = '\u200F'
+    private const val RLI = '\u2067' // Right-to-Left Isolate
+    private const val PDI = '\u2069' // Pop Directional Isolate
+    private const val RLM = '\u200F' // Right-to-Left Mark
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -71,7 +73,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun fixRtlLines(text: CharSequence): CharSequence? {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
         val lines = text.splitByNewlines()
         var changed = false
 
@@ -81,7 +83,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
             val fixed = when {
                 hasHebrewCharacters(line) -> fixHebrewPunctuationForLtr(line, preserveSpans)
-                else -> fixArabicPunctuation(line, preserveSpans)
+                else -> fixArabicLine(line, preserveSpans)
             }
 
             if (fixed !== line && fixed.toString() != line.toString()) {
@@ -94,7 +96,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    private fun fixArabicPunctuation(line: CharSequence, preserveSpans: Boolean): CharSequence {
+    private fun fixArabicLine(line: CharSequence, preserveSpans: Boolean): CharSequence {
         if (line.isEmpty()) return line
         val hasCr = line[line.length - 1] == '\r'
         val end0 = if (hasCr) line.length - 1 else line.length
@@ -106,65 +108,75 @@ internal object AndroidPlayerSubtitleRtlFix {
         while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) rawEnd--
         if (rawStart >= rawEnd) return line
 
-        // 1. معالجة شارحة الحوار المقلوبة في النهاية
+        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 12)
+
+        // عزل السطر بالكامل ككتلة RTL مغلقة ومحمية
+        out.append(RLI)
+        out.append(RLM)
+
+        // 1. معالجة شارحة الحوار المقلوبة في الطرف الآخر
         val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
         if (isDialogEnd) {
-            val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 2)
             out.append("- ")
             var textEnd = rawEnd - 1
             while (textEnd > rawStart && (line[textEnd - 1] == '-' || line[textEnd - 1].isWhitespace())) {
                 textEnd--
             }
-            out.append(line.subSequence(rawStart, textEnd))
-            if (hasCr) out.append('\r')
-            return finishBuilder(out)
-        }
-
-        // 2. فحص الرموز المقلوبة في البداية فقط (مع حماية - و ")
-        val isDialogStart = line[rawStart] == '-' && (rawStart + 1 == rawEnd || line[rawStart + 1].isWhitespace() || !isMalformedLeadingPunctuation(line[rawStart + 1]))
-        var startPunctLen = 0
-        if (!isDialogStart) {
-            while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(line[rawStart + startPunctLen])) {
-                startPunctLen++
-            }
-        }
-
-        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 6)
-
-        // 3. تثبيت علامة الاقتباس إذا بدأت في أول السطر
-        var actualStart = rawStart + startPunctLen
-        if (startPunctLen == 0 && actualStart < rawEnd && (line[actualStart] == '"' || line[actualStart] == '“')) {
-            out.append(line[actualStart]).append(RLM)
-            actualStart++
-        }
-
-        if (startPunctLen > 0) {
-            out.append(line.subSequence(actualStart, rawEnd))
-            out.append(RLM)
-            for (i in 0 until startPunctLen) {
-                out.append(mirrorPunctuation(line[rawStart + i]))
-            }
+            processContentTokens(out, line, rawStart, textEnd)
         } else {
-            // معالجة الأقواس ومنع ابتلاع التنقيط أو علامات الاقتباس: (جين).
-            var i = actualStart
-            while (i < rawEnd) {
-                val c = line[i]
-                out.append(c)
-                if (c == ')' && i + 1 < rawEnd && isTrailingAfterParen(line[i + 1])) {
-                    out.append(RLM)
+            // 2. فحص الرموز المقلوبة التي تم حشرها في أول السطر عن طريق الخطأ
+            val isDialogStart = line[rawStart] == '-'
+            var startPunctLen = 0
+            if (!isDialogStart) {
+                while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(line[rawStart + startPunctLen])) {
+                    startPunctLen++
                 }
-                i++
             }
 
-            // تثبيت علامة الاقتباس إذا انتهى بها السطر (السطر الأول أو الثاني)
-            val lastChar = line[rawEnd - 1]
-            if (lastChar == '"' || lastChar == '”') {
+            if (startPunctLen > 0) {
+                processContentTokens(out, line, rawStart + startPunctLen, rawEnd)
                 out.append(RLM)
+                for (k in 0 until startPunctLen) {
+                    out.append(mirrorPunctuation(line[rawStart + k]))
+                }
+            } else {
+                processContentTokens(out, line, rawStart, rawEnd)
             }
         }
 
+        out.append(RLM)
+        out.append(PDI)
         if (hasCr) out.append('\r')
+
         return finishBuilder(out)
+    }
+
+    private fun processContentTokens(out: Appendable, line: CharSequence, start: Int, end: Int) {
+        var i = start
+        while (i < end) {
+            val c = line[i]
+            when (c) {
+                // تثبيت علامة الاقتباس لحمايتها من القفز للطرف الآخر
+                '"', '”', '“' -> {
+                    out.append(c).append(RLM)
+                }
+                // تثبيت القوس ومنع ابتلاع علامات الترقيم داخله
+                ')' -> {
+                    out.append(c)
+                    if (i + 1 < end && isTrailingAfterParen(line[i + 1])) {
+                        out.append(RLM)
+                    }
+                }
+                // شارحة الحوار في بداية السطر
+                '-' -> {
+                    out.append(c).append(RLM)
+                }
+                else -> {
+                    out.append(c)
+                }
+            }
+            i++
+        }
     }
 
     private fun isTrailingAfterParen(c: Char): Boolean {
