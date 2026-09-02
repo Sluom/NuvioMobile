@@ -10,12 +10,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: false
 
-      - name: Clone MPVKit Directly
+      - name: Remove broken submodules config
         run: |
-          rm -rf MPVKit
-          git clone --depth 1 https://github.com/Sluom/NuvioMobile.git MPVKit_temp || true
-          git clone --depth 1 https://github.com/mpv-android/mpv-android.git MPVKit || true
+          rm -f .gitmodules
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
