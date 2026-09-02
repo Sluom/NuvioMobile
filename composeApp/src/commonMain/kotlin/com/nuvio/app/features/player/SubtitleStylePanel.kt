@@ -23,6 +23,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -74,6 +78,7 @@ fun SubtitleStylePanel(
     onAutoSyncReload: () -> Unit,
 ) {
     val sectionGap = if (isCompact) 12.dp else 16.dp
+    var rtlFixEnabled by remember { mutableStateOf(PlayerSubtitleRtlFix.isRtlEnabled) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -123,6 +128,17 @@ fun SubtitleStylePanel(
             SubtitleToggleChip(
                 enabled = style.bold,
                 onClick = { onStyleChanged(style.copy(bold = !style.bold)) },
+            )
+        }
+
+        SubtitleStyleSection(title = "تصحيح اتجاه الترجمة (RTL Fix)") {
+            SubtitleToggleChip(
+                enabled = rtlFixEnabled,
+                onClick = {
+                    val nextState = !rtlFixEnabled
+                    rtlFixEnabled = nextState
+                    PlayerSubtitleRtlFix.isRtlEnabled = nextState
+                },
             )
         }
 
