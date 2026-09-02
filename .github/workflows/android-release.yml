@@ -28,7 +28,10 @@ jobs:
           IMDB_RATINGS_API_BASE_URL=https://imdb.tapframe.space/
           TRAKT_CLIENT_ID=32598beebfa975878db6183fc691500dbdb9079a46a78ea30b7692be5a07c9fb
           TRAKT_CLIENT_SECRET=b65ce6d691bc350d32f74614ffdfa539da6dc31627c5db0db4855490fa96b4ef
+          TRAKT_REDIRECT_URI=nuvio://auth/trakt
           SIMKL_CLIENT_ID=42bcead71a82f3c0516fe3cfc23cb6e031eb58ceca1554fb9e44ffc26cb7ec7f
+          SIMKL_REDIRECT_URI=nuvio://auth/simkl
+          SIMKL_APP_NAME=nuvio
           EOF
 
       - name: Make gradlew executable
