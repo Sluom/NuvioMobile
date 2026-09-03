@@ -110,11 +110,12 @@ internal object AndroidPlayerSubtitleRtlFix {
         val textToProcess = line.subSequence(rawStart, rawEnd).toString()
 
         var rebelStartIdx = 0
-        while (rebelStartIdx < textToProcess.length && isRebelliousPunctuation(textToProcess[rebelStartIdx])) {
+        // تم تمرير السطر بأكمله لدالة الاستثناء لتطبيق شروطك الدقيقة
+        while (rebelStartIdx < textToProcess.length && isRebelliousPunctuation(textToProcess[rebelStartIdx], textToProcess)) {
             rebelStartIdx++
         }
         var rebelEndIdx = textToProcess.length
-        while (rebelEndIdx > rebelStartIdx && isRebelliousPunctuation(textToProcess[rebelEndIdx - 1])) {
+        while (rebelEndIdx > rebelStartIdx && isRebelliousPunctuation(textToProcess[rebelEndIdx - 1], textToProcess)) {
             rebelEndIdx--
         }
 
@@ -142,8 +143,15 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(out)
     }
 
-    // تم إزالة علامة الاستفهام من هنا لتعود لوضعها السليم القديم
-    private fun isRebelliousPunctuation(c: Char): Boolean {
+    // الفلتر الذكي المحدث بناءً على ملاحظاتك (يحمي الترجمة السليمة ولا يمس العشوائية)
+    private fun isRebelliousPunctuation(c: Char, text: String): Boolean {
+        // إذا جاءت علامة التعجب مع شارحة (-) يتم تركها للإعداد السليم
+        if (c == '!' && text.contains('-')) return false
+        
+        // إذا جاءت علامة التنصيص مع فاصلة (،) يتم تركها للإعداد السليم
+        if ((c == '"' || c == '”' || c == '“') && text.contains('،')) return false
+        
+        // غير ذلك، يتم سحبها لحل مشكلة الترجمة العشوائية
         return c == '"' || c == '”' || c == '“' || c == '!'
     }
 
@@ -186,12 +194,24 @@ internal object AndroidPlayerSubtitleRtlFix {
         while (i < end) {
             val c = line[i]
             when {
-                // الفاصل الخفي لحماية النقطة داخل القوس وعكس الأقواس برمجياً لضبط اتجاهها
+                // قفل الأقواس وعكسها مع تغليفها لتكون عربية صارمة
                 c == ')' && (i + 1 < end && line[i + 1] == '.') -> {
-                    out.append('(').append(ZWNJ)
+                    out.append(RLM).append('(').append(RLM).append(ZWNJ)
                 }
-                c == ')' -> out.append('(')
-                c == '(' -> out.append(')')
+                c == ')' -> {
+                    out.append(RLM).append('(').append(RLM)
+                }
+                c == '(' -> {
+                    out.append(RLM).append(')').append(RLM)
+                }
+                // قفل وتثبيت علامات التنصيص لمنع بعثرتها
+                c == '"' || c == '”' || c == '“' -> {
+                    out.append(RLM).append('"').append(RLM)
+                }
+                // قفل وتثبيت علامة التعجب لمنعها من القفز
+                c == '!' -> {
+                    out.append(RLM).append('!').append(RLM)
+                }
                 else -> out.append(c)
             }
             i++
