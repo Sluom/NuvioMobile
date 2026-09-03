@@ -110,7 +110,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         val textToProcess = line.subSequence(rawStart, rawEnd).toString()
 
         var rebelStartIdx = 0
-        // تم تمرير السطر بأكمله لدالة الاستثناء لتطبيق شروطك الدقيقة
         while (rebelStartIdx < textToProcess.length && isRebelliousPunctuation(textToProcess[rebelStartIdx], textToProcess)) {
             rebelStartIdx++
         }
@@ -143,18 +142,16 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(out)
     }
 
-    // الفلتر الذكي المحدث بناءً على ملاحظاتك (يحمي الترجمة السليمة ولا يمس العشوائية)
+    // الفلتر الذكي للحفاظ على توازن الرموز
     private fun isRebelliousPunctuation(c: Char, text: String): Boolean {
-        // إذا جاءت علامة التعجب مع شارحة (-) يتم تركها للإعداد السليم
         if (c == '!' && text.contains('-')) return false
-        
-        // إذا جاءت علامة التنصيص مع فاصلة (،) يتم تركها للإعداد السليم
         if ((c == '"' || c == '”' || c == '“') && text.contains('،')) return false
-        
-        // غير ذلك، يتم سحبها لحل مشكلة الترجمة العشوائية
         return c == '"' || c == '”' || c == '“' || c == '!'
     }
 
+    // --------------------------------------------------------------------------------
+    // الإعداد السابق الأصلي والنقي 100% للترجمة السليمة (تم استرجاعه كما طلبته بالضبط)
+    // --------------------------------------------------------------------------------
     private fun applyPerfectBaseline(out: Appendable, coreLine: CharSequence) {
         if (coreLine.isEmpty()) return
         val rawStart = 0
@@ -189,28 +186,15 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
     }
 
+    // الإعداد السابق الأصلي والنقي 100% بدون أي تدخّل أو RLM للأقواس والرموز
     private fun processArabicContent(out: Appendable, line: CharSequence, start: Int, end: Int) {
         var i = start
         while (i < end) {
             val c = line[i]
             when {
-                // قفل الأقواس وعكسها مع تغليفها لتكون عربية صارمة
+                // الفاصل الخفي لحماية النقطة داخل القوس (جين.) مستقر تماماً
                 c == ')' && (i + 1 < end && line[i + 1] == '.') -> {
-                    out.append(RLM).append('(').append(RLM).append(ZWNJ)
-                }
-                c == ')' -> {
-                    out.append(RLM).append('(').append(RLM)
-                }
-                c == '(' -> {
-                    out.append(RLM).append(')').append(RLM)
-                }
-                // قفل وتثبيت علامات التنصيص لمنع بعثرتها
-                c == '"' || c == '”' || c == '“' -> {
-                    out.append(RLM).append('"').append(RLM)
-                }
-                // قفل وتثبيت علامة التعجب لمنعها من القفز
-                c == '!' -> {
-                    out.append(RLM).append('!').append(RLM)
+                    out.append(')').append(ZWNJ)
                 }
                 else -> out.append(c)
             }
