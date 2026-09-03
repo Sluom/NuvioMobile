@@ -14,9 +14,8 @@ internal object AndroidPlayerSubtitleRtlFix {
     private const val RLM = '\u200F'
     private const val ZWNJ = '\u200C'
     
-    // أوامر العزل الاتجاهي الجديدة
-    private const val RLI = '\u2067' // Right-to-Left Isolate
-    private const val PDI = '\u2069' // Pop Directional Isolate
+    // السلاح الجديد: مانع القطع (اللحام البصري)
+    private const val WJ = '\u2060' 
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
         val text = cue.text ?: return cue
@@ -111,15 +110,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) rawEnd--
         if (rawStart >= rawEnd) return line
 
-        // موازنة التنصيص سطر-بسطر
-        var quoteCount = 0
-        for (idx in rawStart until rawEnd) {
-            if (line[idx] == '"' || line[idx] == '”' || line[idx] == '“') {
-                quoteCount++
-            }
-        }
-        val isUnbalancedQuote = (quoteCount % 2 != 0)
-
         val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 16)
 
         val isDialogEnd = line[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || line[rawEnd - 2].isWhitespace())
@@ -129,12 +119,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             while (textEnd > rawStart && (line[textEnd - 1] == '-' || line[textEnd - 1].isWhitespace())) {
                 textEnd--
             }
-            
-            out.append(RLI) // بدء صندوق العزل الاتجاهي
             processArabicContent(out, line, rawStart, textEnd)
-            if (isUnbalancedQuote) out.append('"')
-            out.append(PDI) // إنهاء صندوق العزل الاتجاهي
-            
         } else {
             val isDialogStart = line[rawStart] == '-'
             var startPunctLen = 0
@@ -145,20 +130,12 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
 
             if (startPunctLen > 0) {
-                out.append(RLI) // بدء صندوق العزل الاتجاهي
                 processArabicContent(out, line, rawStart + startPunctLen, rawEnd)
-                if (isUnbalancedQuote) out.append('"')
-                
                 for (k in 0 until startPunctLen) {
                     out.append(mirrorPunctuation(line[rawStart + k]))
                 }
-                out.append(PDI) // إنهاء صندوق العزل الاتجاهي
-                
             } else {
-                out.append(RLI) // بدء صندوق العزل الاتجاهي
                 processArabicContent(out, line, rawStart, rawEnd)
-                if (isUnbalancedQuote) out.append('"')
-                out.append(PDI) // إنهاء صندوق العزل الاتجاهي
             }
         }
 
@@ -171,11 +148,16 @@ internal object AndroidPlayerSubtitleRtlFix {
         while (i < end) {
             val c = line[i]
             when {
-                // منع ابتلاع النقطة مع القوس (جين.)
+                // الفاصل الخفي لحماية النقطة داخل القوس (جين.) مستقر ويعمل
                 c == ')' && (i + 1 < end && line[i + 1] == '.') -> {
                     out.append(')').append(ZWNJ)
                 }
-                // النص الصافي يمر بدون أي تلاعب
+
+                // تطبيق "اللحام البصري": لصق علامة التعجب والتنصيص بالكلمات فوراً لمنع القفز
+                c == '"' || c == '”' || c == '“' || c == '!' -> {
+                    out.append(WJ).append(c).append(WJ)
+                }
+
                 else -> {
                     out.append(c)
                 }
