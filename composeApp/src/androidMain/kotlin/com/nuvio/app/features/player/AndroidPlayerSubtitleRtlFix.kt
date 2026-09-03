@@ -11,6 +11,7 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
+    private const val RLM = '\u200F'
     private const val ZWNJ = '\u200C'
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean = false): Cue {
@@ -94,96 +95,114 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    // الخوارزمية الحصرية الجديدة: التبديل المكاني للرموز (الخداع الهندسي)
     private fun fixArabicLine(line: CharSequence, preserveSpans: Boolean): CharSequence {
         if (line.isEmpty()) return line
         val hasCr = line.last() == '\r'
         val end0 = if (hasCr) line.length - 1 else line.length
         if (end0 == 0) return line
 
-        val text = line.subSequence(0, end0).toString()
+        var rawStart = 0
+        while (rawStart < end0 && line[rawStart].isWhitespace()) rawStart++
+        var rawEnd = end0
+        while (rawEnd > rawStart && line[rawEnd - 1].isWhitespace()) rawEnd--
+        if (rawStart >= rawEnd) return line
 
-        // 1. استخراج كتلة الرموز والمسافات الموجودة في بداية الجملة
-        var startIdx = 0
-        while (startIdx < text.length && isBoundaryPunctuation(text[startIdx])) {
-            startIdx++
+        val textToProcess = line.subSequence(rawStart, rawEnd).toString()
+
+        // 1. الاستخراج الجراحي: نسحب فقط الرموز التي تقفز (!، ؟، ") من الأطراف
+        var rebelStartIdx = 0
+        while (rebelStartIdx < textToProcess.length && isRebelliousPunctuation(textToProcess[rebelStartIdx])) {
+            rebelStartIdx++
+        }
+        var rebelEndIdx = textToProcess.length
+        while (rebelEndIdx > rebelStartIdx && isRebelliousPunctuation(textToProcess[rebelEndIdx - 1])) {
+            rebelEndIdx--
         }
 
-        // 2. استخراج كتلة الرموز والمسافات الموجودة في نهاية الجملة
-        var endIdx = text.length
-        while (endIdx > startIdx && isBoundaryPunctuation(text[endIdx - 1])) {
-            endIdx--
-        }
-
-        // إذا كان السطر بالكامل مجرد رموز ومسافات، نتركه كما هو
-        if (startIdx >= endIdx) {
-            return line
-        }
-
-        val leadingPunct = text.substring(0, startIdx)
-        val trailingPunct = text.substring(endIdx, text.length)
-        val coreText = text.substring(startIdx, endIdx)
+        val leadingRebels = textToProcess.substring(0, rebelStartIdx)
+        val trailingRebels = textToProcess.substring(rebelEndIdx, textToProcess.length)
+        val coreLine = textToProcess.substring(rebelStartIdx, rebelEndIdx)
 
         val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 16)
 
-        // 3. الخدعة: لصق رموز (النهاية) في (بداية) السطر بعد عكسها وتوجيهها
-        if (trailingPunct.isNotEmpty()) {
-            out.append(mirrorAndReverse(trailingPunct))
+        // 2. الخدعة البصرية: نلصق الرموز المتمردة (فقط) في الجهة المعاكسة
+        if (trailingRebels.isNotEmpty()) {
+            for (i in trailingRebels.indices.reversed()) {
+                out.append(mirrorPunctuation(trailingRebels[i]))
+            }
         }
 
-        // 4. لصق النص العربي الأساسي في المنتصف
-        appendProcessedCore(out, coreText)
+        // 3. نمرر باقي النص (الذي يحتوي النقطة وشارحة الحوار) للكود المستقر القديم الذي لا يمسه بسوء
+        applyPerfectBaseline(out, coreLine)
 
-        // 5. الخدعة: لصق رموز (البداية) في (نهاية) السطر بعد عكسها وتوجيهها
-        if (leadingPunct.isNotEmpty()) {
-            out.append(mirrorAndReverse(leadingPunct))
+        // 4. الخدعة البصرية: نلصق رموز البداية المتمردة في النهاية
+        if (leadingRebels.isNotEmpty()) {
+            for (i in leadingRebels.indices.reversed()) {
+                out.append(mirrorPunctuation(leadingRebels[i]))
+            }
         }
 
         if (hasCr) out.append('\r')
         return finishBuilder(out)
     }
 
-    // دالة للتعرف على الرموز الطرفية التي تحتاج للتبديل
-    private fun isBoundaryPunctuation(c: Char): Boolean {
-        return c.isWhitespace() || c in setOf(
-            '-', '—', '"', '”', '“', '\'', '«', '»',
-            '(', ')', '[', ']', '{', '}',
-            '!', '؟', '?', '.', ',', '،', ':', ';', '…'
-        )
+    // فلتر حصري للرموز التي أثبتت تمردها فقط
+    private fun isRebelliousPunctuation(c: Char): Boolean {
+        return c == '"' || c == '”' || c == '“' || c == '!' || c == '؟' || c == '?'
     }
 
-    // دالة لعكس ترتيب الرموز ومرايا الأقواس لتناسب موقعها الجديد
-    private fun mirrorAndReverse(s: String): String {
-        val sb = StringBuilder(s.length)
-        for (i in s.indices.reversed()) {
-            sb.append(mirrorPunctuation(s[i]))
+    // الكود القديم المستقر الذي يحافظ على سلامة النصوص الطبيعية 100%
+    private fun applyPerfectBaseline(out: Appendable, coreLine: CharSequence) {
+        if (coreLine.isEmpty()) return
+        val rawStart = 0
+        val rawEnd = coreLine.length
+
+        val isDialogEnd = coreLine[rawEnd - 1] == '-' && (rawEnd - 1 == rawStart || coreLine[rawEnd - 2].isWhitespace())
+        if (isDialogEnd) {
+            out.append("- ")
+            var textEnd = rawEnd - 1
+            while (textEnd > rawStart && (coreLine[textEnd - 1] == '-' || coreLine[textEnd - 1].isWhitespace())) {
+                textEnd--
+            }
+            processArabicContent(out, coreLine, rawStart, textEnd)
+        } else {
+            val isDialogStart = coreLine[rawStart] == '-'
+            var startPunctLen = 0
+            if (!isDialogStart) {
+                while (rawStart + startPunctLen < rawEnd && isMalformedLeadingPunctuation(coreLine[rawStart + startPunctLen])) {
+                    startPunctLen++
+                }
+            }
+
+            if (startPunctLen > 0) {
+                processArabicContent(out, coreLine, rawStart + startPunctLen, rawEnd)
+                out.append(RLM)
+                for (k in 0 until startPunctLen) {
+                    out.append(mirrorPunctuation(coreLine[rawStart + k]))
+                }
+            } else {
+                processArabicContent(out, coreLine, rawStart, rawEnd)
+            }
         }
-        return sb.toString()
     }
 
-    // معالجة النص الداخلي (حماية النقطة داخل الأقواس مستقرة ولا نمسها)
-    private fun appendProcessedCore(out: Appendable, core: String) {
-        var i = 0
-        while (i < core.length) {
-            val c = core[i]
-            out.append(c)
-            if (c == ')' && i + 1 < core.length && core[i + 1] == '.') {
-                out.append(ZWNJ)
+    private fun processArabicContent(out: Appendable, line: CharSequence, start: Int, end: Int) {
+        var i = start
+        while (i < end) {
+            val c = line[i]
+            when {
+                // الفاصل الخفي لحماية النقطة داخل القوس (جين.)
+                c == ')' && (i + 1 < end && line[i + 1] == '.') -> {
+                    out.append(')').append(ZWNJ)
+                }
+                else -> out.append(c)
             }
             i++
         }
     }
 
-    private fun mirrorPunctuation(c: Char): Char = when (c) {
-        '(' -> ')'
-        ')' -> '('
-        '[' -> ']'
-        ']' -> '['
-        '{' -> '}'
-        '}' -> '{'
-        '«' -> '»'
-        '»' -> '«'
-        else -> c
+    private fun isMalformedLeadingPunctuation(c: Char): Boolean {
+        return c == '.' || c == '،' || c == ',' || c == ':' || c == ';' || c == '…'
     }
 
     private fun fixHebrewPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
@@ -211,6 +230,18 @@ internal object AndroidPlayerSubtitleRtlFix {
     private fun isHebrewPunctuation(ch: Char, isEnd: Boolean): Boolean {
         if (isEnd && ch.isDigit()) return false
         return ch in HEBREW_PUNCTUATION || ch.isWhitespace()
+    }
+
+    private fun mirrorPunctuation(c: Char): Char = when (c) {
+        '(' -> ')'
+        ')' -> '('
+        '[' -> ']'
+        ']' -> '['
+        '{' -> '}'
+        '}' -> '{'
+        '«' -> '»'
+        '»' -> '«'
+        else -> c
     }
 
     private fun appendHebrewMirroredReversed(
