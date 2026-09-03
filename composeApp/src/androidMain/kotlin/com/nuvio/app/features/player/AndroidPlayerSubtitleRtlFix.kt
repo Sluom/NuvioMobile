@@ -109,7 +109,6 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val textToProcess = line.subSequence(rawStart, rawEnd).toString()
 
-        // 1. الاستخراج الجراحي: نسحب فقط الرموز التي تقفز (!، ؟، ") من الأطراف
         var rebelStartIdx = 0
         while (rebelStartIdx < textToProcess.length && isRebelliousPunctuation(textToProcess[rebelStartIdx])) {
             rebelStartIdx++
@@ -125,17 +124,14 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0 + 16)
 
-        // 2. الخدعة البصرية: نلصق الرموز المتمردة (فقط) في الجهة المعاكسة
         if (trailingRebels.isNotEmpty()) {
             for (i in trailingRebels.indices.reversed()) {
                 out.append(mirrorPunctuation(trailingRebels[i]))
             }
         }
 
-        // 3. نمرر باقي النص (الذي يحتوي النقطة وشارحة الحوار) للكود المستقر القديم الذي لا يمسه بسوء
         applyPerfectBaseline(out, coreLine)
 
-        // 4. الخدعة البصرية: نلصق رموز البداية المتمردة في النهاية
         if (leadingRebels.isNotEmpty()) {
             for (i in leadingRebels.indices.reversed()) {
                 out.append(mirrorPunctuation(leadingRebels[i]))
@@ -146,12 +142,11 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(out)
     }
 
-    // فلتر حصري للرموز التي أثبتت تمردها فقط
+    // تم إزالة علامة الاستفهام من هنا لتعود لوضعها السليم القديم
     private fun isRebelliousPunctuation(c: Char): Boolean {
-        return c == '"' || c == '”' || c == '“' || c == '!' || c == '؟' || c == '?'
+        return c == '"' || c == '”' || c == '“' || c == '!'
     }
 
-    // الكود القديم المستقر الذي يحافظ على سلامة النصوص الطبيعية 100%
     private fun applyPerfectBaseline(out: Appendable, coreLine: CharSequence) {
         if (coreLine.isEmpty()) return
         val rawStart = 0
@@ -191,10 +186,12 @@ internal object AndroidPlayerSubtitleRtlFix {
         while (i < end) {
             val c = line[i]
             when {
-                // الفاصل الخفي لحماية النقطة داخل القوس (جين.)
+                // الفاصل الخفي لحماية النقطة داخل القوس وعكس الأقواس برمجياً لضبط اتجاهها
                 c == ')' && (i + 1 < end && line[i + 1] == '.') -> {
-                    out.append(')').append(ZWNJ)
+                    out.append('(').append(ZWNJ)
                 }
+                c == ')' -> out.append('(')
+                c == '(' -> out.append(')')
                 else -> out.append(c)
             }
             i++
