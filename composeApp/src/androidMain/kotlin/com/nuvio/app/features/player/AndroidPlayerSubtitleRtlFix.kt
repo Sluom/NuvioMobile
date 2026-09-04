@@ -17,26 +17,25 @@ internal object AndroidPlayerSubtitleRtlFix {
             return cue
         }
 
-        if (containsArabic(text)) {
-            val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
+        // طبقة العزل الخارجية لمعالجة الأقواس الطرفية بمعزل تام عن دوال المعالجة الأساسية
+        val preProcessedText = isolateAndFlipParentheses(text)
+
+        val processedText = if (containsArabic(preProcessedText)) {
+            val isMessy = isMessySubtitle(preProcessedText, isBuiltInSubtitle)
             
-            val fixed = if (isMessy) {
-                applyVisualSwapping(text)
+            if (isMessy) {
+                applyVisualSwapping(preProcessedText)
             } else {
-                wrapArabicLines(text)
+                wrapArabicLines(preProcessedText)
             }
-            
-            if (fixed.contentEquals(text)) return cue
-            return cue.buildUpon().setText(fixed).build()
+        } else if (containsRtlChars(preProcessedText)) {
+            fixHebrewLines(preProcessedText, isBuiltInSubtitle) ?: preProcessedText
+        } else {
+            preProcessedText
         }
 
-        if (containsRtlChars(text)) {
-            val fixed = fixHebrewLines(text, isBuiltInSubtitle) ?: return cue
-            if (fixed.contentEquals(text)) return cue
-            return cue.buildUpon().setText(fixed).build()
-        }
-
-        return cue
+        if (processedText.contentEquals(text)) return cue
+        return cue.buildUpon().setText(processedText).build()
     }
 
     fun fixTimedCues(
@@ -82,6 +81,33 @@ internal object AndroidPlayerSubtitleRtlFix {
             else -> 5_000_000L
         }
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
+    }
+
+    private fun isolateAndFlipParentheses(text: CharSequence): CharSequence {
+        val lines = text.splitByNewlines()
+        val preserveSpans = text is Spanned
+        val builder = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)
+
+        for (i in lines.indices) {
+            if (i > 0) builder.append('\n')
+            var lineStr = lines[i].toString()
+
+            // عكس الأقواس الطرفية المقلوبة بناءً على طلبك الأخير
+            if (lineStr.startsWith("(")) {
+                lineStr = ")" + lineStr.substring(1)
+            } else if (lineStr.startsWith(")")) {
+                lineStr = "(" + lineStr.substring(1)
+            }
+
+            if (lineStr.endsWith(")")) {
+                lineStr = lineStr.substring(0, lineStr.length - 1) + "("
+            } else if (lineStr.endsWith("(")) {
+                lineStr = lineStr.substring(0, lineStr.length - 1) + ")"
+            }
+
+            builder.append(lineStr)
+        }
+        return finishBuilder(builder)
     }
 
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
@@ -193,13 +219,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             
             if (hasCr) builder.append('\r')
         }
-        return isolateIsolatedParentheses(finishBuilder(builder))
-    }
-
-    private fun isolateIsolatedParentheses(text: CharSequence): CharSequence {
-        val s = text.toString()
-        if (!s.contains("(!\u202B") && !s.contains("(؟\u202B")) return text
-        return s.replace("(!\u202B", ")\u202B!").replace("(؟\u202B", ")\u202B؟")
+        return finishBuilder(builder)
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
