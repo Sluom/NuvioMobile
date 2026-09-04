@@ -84,27 +84,14 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    // =========================================================================
-    // عالم الترجمات المشوشة: لم يُلمَس أي حرف منه - يبقى كما يعمل بشكل مثالي
-    // =========================================================================
-
-    // =========================================================================
-    // بوابة التوجيه (Router): تقرر أي عالم يستقبل كل سطر
-    // تم تصحيحها فقط عبر دالتين مساعدتين جديدتين ومستقلتين أدناه،
-    // دون المساس بـ isBoundaryPunctuation المُستخدمة داخل applyVisualSwapping
-    // =========================================================================
-
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
-        if (isBuiltInSubtitle) return false // الترجمة المدمجة تعتبر سليمة دائماً
+        if (isBuiltInSubtitle) return false
         
         val lines = text.splitByNewlines()
         for (line in lines) {
             val trimmed = line.trim()
             if (trimmed.isEmpty()) continue
             
-            // إذا كان السطر يبدأ أو ينتهي برموز محايدة مكشوفة فعلاً (وليست
-            // استخداماً طبيعياً شائعاً كنقطة نهاية الجملة أو شرطة حوار)،
-            // نعتبره عشوائياً ويحتاج للتبديل
             if (hasMessyLeadingBoundary(trimmed) || hasMessyTrailingBoundary(trimmed)) {
                 return true
             }
@@ -112,36 +99,32 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    // تُستخدم حصراً هنا لتصنيف "هل هذا السطر مشوش؟" - لا علاقة لها بمنطق
-    // applyVisualSwapping ولا تُستدعى منه
-    private fun hasMessyLeadingBoundary(trimmed: CharSequence): Boolean {
-        val firstChar = trimmed.first()
-        if (!isBoundaryPunctuation(firstChar)) return false
-
-        // شرطة حوار طبيعية في بداية السطر ("- مرحبا") ليست عطلاً
-        if ((firstChar == '-' || firstChar == '—') &&
-            trimmed.length > 1 &&
-            trimmed[1] == ' '
-        ) {
+    private fun hasMessyLeadingBoundary(text: CharSequence): Boolean {
+        if (text.isEmpty()) return false
+        val firstChar = text.first()
+        
+        if (firstChar == '-' || firstChar == '—') {
             return false
         }
-
-        return true
+        
+        return isBoundaryPunctuation(firstChar)
     }
 
-    private fun hasMessyTrailingBoundary(trimmed: CharSequence): Boolean {
-        val lastChar = trimmed.last()
-        if (!isBoundaryPunctuation(lastChar)) return false
-
-        // نقطة نهاية جملة طبيعية واحدة (وليست جزءاً من سلسلة رموز مثل "..." أو "،.")
-        // ليست عطلاً
-        if (lastChar == '.' &&
-            (trimmed.length == 1 || !isBoundaryPunctuation(trimmed[trimmed.length - 2]))
-        ) {
+    private fun hasMessyTrailingBoundary(text: CharSequence): Boolean {
+        if (text.isEmpty()) return false
+        val lastChar = text.last()
+        
+        if (lastChar == '.') {
+            if (text.length > 1) {
+                val prevChar = text[text.length - 2]
+                if (prevChar == '.' || prevChar == ',' || prevChar == '،') {
+                    return true
+                }
+            }
             return false
         }
-
-        return true
+        
+        return isBoundaryPunctuation(lastChar)
     }
 
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
@@ -218,11 +201,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         else -> c
     }
 
-    // =========================================================================
-    // عالم الترجمات السليمة: تم إصلاحه - الرجوع لتضمين RLE/PDF القوي والمستقر
-    // بدل RLM الضعيفة (كانت السبب في المظهر المبعثر أحياناً)
-    // =========================================================================
-
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
@@ -234,14 +212,12 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(line)
                 continue
             }
-            val hasCr = line[line.length - 1] == '\r'
+            val hasCr = line.lastOrNull() == '\r'
             val core = if (hasCr) line.subSequence(0, line.length - 1) else line
             if (core.isEmpty()) {
                 builder.append(line)
                 continue
             }
-            // RLE...PDF: تضمين صريح ومغلق يضمن نتيجة ثابتة بغض النظر عن
-            // أي محتوى لاتيني/أرقام مدمجة أو سياق مجاور
             builder.append('\u202B').append(core).append('\u202C')
             if (hasCr) builder.append('\r')
         }
