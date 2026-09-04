@@ -160,12 +160,11 @@ internal object AndroidPlayerSubtitleRtlFix {
                 }
             }
             
-            // استخدام الدالة الجديدة التي تستثني الأقواس لمنع اقتطاعها
             var start = 0
-            while (start < cleanCore.length && isExtractableBoundaryPunctuation(cleanCore[start])) start++
+            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
             
             var end = cleanCore.length
-            while (end > start && isExtractableBoundaryPunctuation(cleanCore[end - 1])) end--
+            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
             
             if (start >= end) {
                 builder.append(cleanCore)
@@ -194,24 +193,20 @@ internal object AndroidPlayerSubtitleRtlFix {
             
             if (hasCr) builder.append('\r')
         }
-        return finishBuilder(builder)
+        return isolateIsolatedParentheses(finishBuilder(builder))
     }
 
-    // الدالة الأصلية للرصد (تبقى كما هي تماماً لاصطياد الأسطر المشوشة)
+    private fun isolateIsolatedParentheses(text: CharSequence): CharSequence {
+        val s = text.toString()
+        if (!s.contains("(!\u202B") && !s.contains("(؟\u202B")) return text
+        return s.replace("(!\u202B", ")\u202B!").replace("(؟\u202B", ")\u202B؟")
+    }
+
     private fun isBoundaryPunctuation(c: Char): Boolean {
         return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
                c == '!' || c == '؟' || c == '?' ||
                c == '-' || c == '—' ||
                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
-               c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
-               c.isWhitespace()
-    }
-
-    // الدالة الجديدة للاقتطاع (تستثني الأقواس لتبقى متماسكة ككتلة واحدة داخل middleText)
-    private fun isExtractableBoundaryPunctuation(c: Char): Boolean {
-        return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
-               c == '!' || c == '؟' || c == '?' ||
-               c == '-' || c == '—' ||
                c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
                c.isWhitespace()
     }
