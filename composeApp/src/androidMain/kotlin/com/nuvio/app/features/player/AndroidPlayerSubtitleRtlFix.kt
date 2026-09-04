@@ -161,10 +161,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             var start = 0
-            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
+            while (start < cleanCore.length && isExtractableBoundaryPunctuation(cleanCore[start])) start++
             
             var end = cleanCore.length
-            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
+            while (end > start && isExtractableBoundaryPunctuation(cleanCore[end - 1])) end--
             
             if (start >= end) {
                 builder.append(fixParenthesesIsolation(cleanCore))
@@ -194,6 +194,16 @@ internal object AndroidPlayerSubtitleRtlFix {
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
+    }
+
+    // نفس isBoundaryPunctuation تماماً باستثناء الأقواس الهلالية ( )
+    // تُستخدم فقط عند تحديد حدود "النص الأساسي" داخل applyVisualSwapping
+    // كي تبقى الأقواس دائماً جزءاً من middleText وتُعالَج عبر fixParenthesesIsolation
+    // بدل آلية القلب اليدوي (mirrorArabicPunctuation) التي تُنتج عرضاً خاطئاً
+    // حين يكون القوس هو الحرف الحدّي الأول أو الأخير في الجملة كاملة
+    private fun isExtractableBoundaryPunctuation(c: Char): Boolean {
+        if (c == '(' || c == ')') return false
+        return isBoundaryPunctuation(c)
     }
 
     private fun fixParenthesesIsolation(text: CharSequence): CharSequence {
