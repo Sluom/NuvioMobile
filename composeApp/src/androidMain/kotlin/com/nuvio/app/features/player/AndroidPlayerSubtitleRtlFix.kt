@@ -127,17 +127,80 @@ internal object AndroidPlayerSubtitleRtlFix {
         return isBoundaryPunctuation(lastChar)
     }
 
-    // Isolated variant used only within applyVisualSwapping's start/end trimming.
-    // Excludes bidirectionally-mirrored bracket pairs: these need the full RLE/PDF
-    // embedding (which already works correctly for interior occurrences) rather
-    // than the individual mirrorArabicPunctuation swap applied to boundary
-    // punctuation like '.', ',', etc. Kept separate from isBoundaryPunctuation so
-    // isMessySubtitle's classification (and therefore wrapArabicLines / the
-    // Hebrew path) is completely unaffected.
-    private fun isBoundaryPunctuationForCoreTrim(c: Char): Boolean {
-        if (c == '(' || c == ')' || c == '[' || c == ']' ||
-            c == '{' || c == '}' || c == '«' || c == '»') return false
-        return isBoundaryPunctuation(c)
+    /**
+     * Narrow, isolated pre-check run before the generic trim logic in
+     * applyVisualSwapping. It matches ONLY the exact shape: an optional
+     * leading dash marker ('-' or '—' plus following whitespace), followed
+     * immediately by a single parenthetical that spans the ENTIRE rest of
+     * the line (balanced, closing only at the very end), optionally
+     * followed by a single trailing '؟' or '?'.
+     *
+     * In exactly this shape, the generic start/end trim strips the dash
+     * AND the immediately-adjacent opening paren together as boundary
+     * punctuation, separating the paired parentheses and producing
+     * incorrect individual mirroring. This function detects that shape up
+     * front and instead wraps the whole parenthetical — both parens
+     * included — as a single RLE/PDF-embedded unit, the same mechanism
+     * that already renders interior parentheticals correctly.
+     *
+     * Returns the fixed text, or null if the line doesn't match this exact
+     * shape — in which case the caller must fall back to the untouched
+     * original algorithm. Every other shape (interior parens, boundary
+     * parens followed by more text, no dash, etc.) returns null here and is
+     * therefore completely unaffected by this function.
+     */
+    private fun tryFixLeadingDashWholeParenthetical(core: CharSequence): CharSequence? {
+        if (core.isEmpty()) return null
+
+        var prefixEnd = 0
+        if (core[0] == '-' || core[0] == '—') {
+            prefixEnd = 1
+            while (prefixEnd < core.length && core[prefixEnd].isWhitespace()) prefixEnd++
+        }
+
+        if (prefixEnd >= core.length || core[prefixEnd] != '(') return null
+
+        var contentEnd = core.length
+        var trailingQuestionMark = false
+        if (contentEnd > prefixEnd && (core[contentEnd - 1] == '؟' || core[contentEnd - 1] == '?')) {
+            trailingQuestionMark = true
+            contentEnd--
+        }
+
+        if (contentEnd <= prefixEnd || core[contentEnd - 1] != ')') return null
+
+        // Confirm the span is a single well-formed parenthetical that only
+        // balances back to zero at the very last character.
+        var depth = 0
+        for (idx in prefixEnd until contentEnd) {
+            when (core[idx]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth < 0) return null
+                    if (depth == 0 && idx != contentEnd - 1) return null
+                }
+            }
+        }
+        if (depth != 0) return null
+
+        val prefix = core.subSequence(0, prefixEnd)
+        val wrapped = core.subSequence(prefixEnd, contentEnd)
+
+        val preserveSpans = core is Spanned
+        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(core.length + 4)
+
+        out.append('\u202B').append(wrapped).append('\u202C')
+        if (trailingQuestionMark) out.append('؟')
+        // Append the captured dash prefix reversed, matching how the
+        // original algorithm places a leading dash marker last (rightmost
+        // on screen) — dash and whitespace are self-mirroring so only the
+        // final position matters.
+        for (i in prefix.indices.reversed()) {
+            out.append(prefix[i])
+        }
+
+        return finishBuilder(out)
     }
 
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
@@ -161,6 +224,13 @@ internal object AndroidPlayerSubtitleRtlFix {
                 if (hasCr) builder.append('\r')
                 continue
             }
+
+            val specialFixed = tryFixLeadingDashWholeParenthetical(rawCore)
+            if (specialFixed != null) {
+                builder.append(specialFixed)
+                if (hasCr) builder.append('\r')
+                continue
+            }
             
             val cleanCore = StringBuilder()
             var hasQuestionMark = false
@@ -174,10 +244,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             var start = 0
-            while (start < cleanCore.length && isBoundaryPunctuationForCoreTrim(cleanCore[start])) start++
+            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
             
             var end = cleanCore.length
-            while (end > start && isBoundaryPunctuationForCoreTrim(cleanCore[end - 1])) end--
+            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
             
             if (start >= end) {
                 builder.append(cleanCore)
