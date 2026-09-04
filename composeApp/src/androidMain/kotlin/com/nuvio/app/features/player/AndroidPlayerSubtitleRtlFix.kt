@@ -114,10 +114,10 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        if (lastChar == '.') {
+        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
-                if (prevChar == '.' || prevChar == ',' || prevChar == '،') {
+                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?') {
                     return true
                 }
             }
