@@ -18,14 +18,12 @@ internal object PlayerSubtitleRtlFix {
         }
 
         if (containsArabic(text)) {
-            // آلية الاستشعار: هل الترجمة عشوائية وتحتاج لتدخل هندسي؟
             val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
             
-            // التوجيه الذكي للمسار الصحيح
             val fixed = if (isMessy) {
-                applyVisualSwapping(text) // طبقة التبديل المكاني الجديدة
+                applyVisualSwapping(text)
             } else {
-                wrapArabicLines(text) // الكود الأصلي النقي
+                wrapArabicLines(text)
             }
             
             if (fixed.contentEquals(text)) return cue
@@ -86,12 +84,8 @@ internal object PlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    // =========================================================================
-    // بداية الطبقة الإضافية للترجمات العشوائية (تمت إضافتها دون المساس بالأصل)
-    // =========================================================================
-
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
-        if (isBuiltInSubtitle) return false // الترجمة المدمجة تعتبر سليمة دائماً
+        if (isBuiltInSubtitle) return false
         
         val lines = text.splitByNewlines()
         for (line in lines) {
@@ -101,7 +95,6 @@ internal object PlayerSubtitleRtlFix {
             val firstChar = trimmed.first()
             val lastChar = trimmed.last()
             
-            // إذا كان السطر يبدأ أو ينتهي برموز محايدة مكشوفة، نعتبره عشوائياً ويحتاج للتبديل
             if (isBoundaryPunctuation(firstChar) || isBoundaryPunctuation(lastChar)) {
                 return true
             }
@@ -147,15 +140,12 @@ internal object PlayerSubtitleRtlFix {
             val trailingPunc = core.subSequence(end, core.length)
             val middleText = core.subSequence(start, end)
             
-            // 1. لصق الرموز الطرفية (النهاية) بشكل معكوس لترسم في أقصى اليسار
             for (j in trailingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
             
-            // 2. تغليف النص العربي الصافي (في المنتصف) كما يفعل الكود الأصلي تماماً
             builder.append('\u202B').append(middleText).append('\u202C')
             
-            // 3. لصق رموز البداية بشكل معكوس لترسم في أقصى اليمين
             for (j in leadingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
             }
@@ -185,10 +175,6 @@ internal object PlayerSubtitleRtlFix {
         '»' -> '«'
         else -> c
     }
-
-    // =========================================================================
-    // الكود الأصلي النقي 100% (لم يتم تعديل أي حرف منه بالأسفل)
-    // =========================================================================
 
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
