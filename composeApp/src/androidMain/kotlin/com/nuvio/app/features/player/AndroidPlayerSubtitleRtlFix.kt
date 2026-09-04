@@ -176,6 +176,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         else -> c
     }
 
+    // تم التعديل هنا: استخدام U+200F في بداية ونهاية النص السليم لضمان محاذاة علامات الترقيم
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
@@ -193,7 +194,8 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(line)
                 continue
             }
-            builder.append('\u202B').append(core).append('\u202C')
+            // إضافة محرف التوجيه (RLM) لفرض سياق اليمين إلى اليسار
+            builder.append('\u200F').append(core).append('\u200F')
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
