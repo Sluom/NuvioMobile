@@ -142,47 +142,53 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             val hasCr = line.lastOrNull() == '\r'
-            val core = if (hasCr) line.subSequence(0, line.length - 1) else line
+            val rawCore = if (hasCr) line.subSequence(0, line.length - 1) else line
             
-            if (core.isEmpty()) {
+            if (rawCore.isEmpty()) {
                 if (hasCr) builder.append('\r')
                 continue
+            }
+            
+            val cleanCore = StringBuilder()
+            var hasQuestionMark = false
+            for (k in 0 until rawCore.length) {
+                val ch = rawCore[k]
+                if (ch == '؟' || ch == '?') {
+                    hasQuestionMark = true
+                } else {
+                    cleanCore.append(ch)
+                }
             }
             
             var start = 0
-            while (start < core.length && isBoundaryPunctuation(core[start])) start++
+            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
             
-            var end = core.length
-            while (end > start && isBoundaryPunctuation(core[end - 1])) end--
+            var end = cleanCore.length
+            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
             
             if (start >= end) {
-                builder.append(core)
+                builder.append(cleanCore)
+                if (hasQuestionMark) builder.append('؟')
                 if (hasCr) builder.append('\r')
                 continue
             }
             
-            val leadingPunc = core.subSequence(0, start)
-            val trailingPunc = core.subSequence(end, core.length)
-            val middleText = core.subSequence(start, end)
+            val leadingPunc = cleanCore.subSequence(0, start)
+            val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
+            val middleText = cleanCore.subSequence(start, end)
             
             for (j in trailingPunc.indices.reversed()) {
-                val c = trailingPunc[j]
-                if (c == '؟' || c == '?') {
-                    builder.append('\u200F').append(c).append('\u200F')
-                } else {
-                    builder.append(mirrorArabicPunctuation(c))
-                }
+                builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
             
             builder.append('\u202B').append(middleText).append('\u202C')
             
             for (j in leadingPunc.indices.reversed()) {
-                val c = leadingPunc[j]
-                if (c == '؟' || c == '?') {
-                    builder.append('\u200F').append(c).append('\u200F')
-                } else {
-                    builder.append(mirrorArabicPunctuation(c))
-                }
+                builder.append(mirrorArabicPunctuation(leadingPunc[j]))
+            }
+            
+            if (hasQuestionMark) {
+                builder.append('؟')
             }
             
             if (hasCr) builder.append('\r')
