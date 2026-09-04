@@ -17,25 +17,26 @@ internal object AndroidPlayerSubtitleRtlFix {
             return cue
         }
 
-        // طبقة العزل الخارجية لمعالجة الأقواس الطرفية بمعزل تام عن دوال المعالجة الأساسية
-        val preProcessedText = isolateAndFlipParentheses(text)
-
-        val processedText = if (containsArabic(preProcessedText)) {
-            val isMessy = isMessySubtitle(preProcessedText, isBuiltInSubtitle)
+        if (containsArabic(text)) {
+            val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
             
-            if (isMessy) {
-                applyVisualSwapping(preProcessedText)
+            val fixed = if (isMessy) {
+                applyVisualSwapping(text)
             } else {
-                wrapArabicLines(preProcessedText)
+                wrapArabicLines(text)
             }
-        } else if (containsRtlChars(preProcessedText)) {
-            fixHebrewLines(preProcessedText, isBuiltInSubtitle) ?: preProcessedText
-        } else {
-            preProcessedText
+            
+            if (fixed.contentEquals(text)) return cue
+            return cue.buildUpon().setText(fixed).build()
         }
 
-        if (processedText.contentEquals(text)) return cue
-        return cue.buildUpon().setText(processedText).build()
+        if (containsRtlChars(text)) {
+            val fixed = fixHebrewLines(text, isBuiltInSubtitle) ?: return cue
+            if (fixed.contentEquals(text)) return cue
+            return cue.buildUpon().setText(fixed).build()
+        }
+
+        return cue
     }
 
     fun fixTimedCues(
@@ -83,33 +84,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun isolateAndFlipParentheses(text: CharSequence): CharSequence {
-        val lines = text.splitByNewlines()
-        val preserveSpans = text is Spanned
-        val builder = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)
-
-        for (i in lines.indices) {
-            if (i > 0) builder.append('\n')
-            var lineStr = lines[i].toString()
-
-            // عكس الأقواس الطرفية المقلوبة بناءً على طلبك الأخير
-            if (lineStr.startsWith("(")) {
-                lineStr = ")" + lineStr.substring(1)
-            } else if (lineStr.startsWith(")")) {
-                lineStr = "(" + lineStr.substring(1)
-            }
-
-            if (lineStr.endsWith(")")) {
-                lineStr = lineStr.substring(0, lineStr.length - 1) + "("
-            } else if (lineStr.endsWith("(")) {
-                lineStr = lineStr.substring(0, lineStr.length - 1) + ")"
-            }
-
-            builder.append(lineStr)
-        }
-        return finishBuilder(builder)
-    }
-
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
         if (isBuiltInSubtitle) return false
         
@@ -153,6 +127,19 @@ internal object AndroidPlayerSubtitleRtlFix {
         return isBoundaryPunctuation(lastChar)
     }
 
+    // Isolated variant used only within applyVisualSwapping's start/end trimming.
+    // Excludes bidirectionally-mirrored bracket pairs: these need the full RLE/PDF
+    // embedding (which already works correctly for interior occurrences) rather
+    // than the individual mirrorArabicPunctuation swap applied to boundary
+    // punctuation like '.', ',', etc. Kept separate from isBoundaryPunctuation so
+    // isMessySubtitle's classification (and therefore wrapArabicLines / the
+    // Hebrew path) is completely unaffected.
+    private fun isBoundaryPunctuationForCoreTrim(c: Char): Boolean {
+        if (c == '(' || c == ')' || c == '[' || c == ']' ||
+            c == '{' || c == '}' || c == '«' || c == '»') return false
+        return isBoundaryPunctuation(c)
+    }
+
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
@@ -187,10 +174,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             var start = 0
-            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
+            while (start < cleanCore.length && isBoundaryPunctuationForCoreTrim(cleanCore[start])) start++
             
             var end = cleanCore.length
-            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
+            while (end > start && isBoundaryPunctuationForCoreTrim(cleanCore[end - 1])) end--
             
             if (start >= end) {
                 builder.append(cleanCore)
