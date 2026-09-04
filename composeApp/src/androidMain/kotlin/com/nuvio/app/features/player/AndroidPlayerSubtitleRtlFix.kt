@@ -166,13 +166,23 @@ internal object AndroidPlayerSubtitleRtlFix {
             val middleText = core.subSequence(start, end)
             
             for (j in trailingPunc.indices.reversed()) {
-                builder.append(mirrorArabicPunctuation(trailingPunc[j]))
+                val c = trailingPunc[j]
+                if (c == '؟' || c == '?') {
+                    builder.append('\u200F').append(c).append('\u200F')
+                } else {
+                    builder.append(mirrorArabicPunctuation(c))
+                }
             }
             
             builder.append('\u202B').append(middleText).append('\u202C')
             
             for (j in leadingPunc.indices.reversed()) {
-                builder.append(mirrorArabicPunctuation(leadingPunc[j]))
+                val c = leadingPunc[j]
+                if (c == '؟' || c == '?') {
+                    builder.append('\u200F').append(c).append('\u200F')
+                } else {
+                    builder.append(mirrorArabicPunctuation(c))
+                }
             }
             
             if (hasCr) builder.append('\r')
