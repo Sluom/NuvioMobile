@@ -160,6 +160,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 }
             }
             
+            // استخدام الدالة الجديدة التي تستثني الأقواس لمنع اقتطاعها
             var start = 0
             while (start < cleanCore.length && isExtractableBoundaryPunctuation(cleanCore[start])) start++
             
@@ -167,7 +168,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             while (end > start && isExtractableBoundaryPunctuation(cleanCore[end - 1])) end--
             
             if (start >= end) {
-                builder.append(fixParenthesesIsolation(cleanCore))
+                builder.append(cleanCore)
                 if (hasQuestionMark) builder.append('؟')
                 if (hasCr) builder.append('\r')
                 continue
@@ -181,7 +182,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
             
-            builder.append('\u202B').append(fixParenthesesIsolation(middleText)).append('\u202C')
+            builder.append('\u202B').append(middleText).append('\u202C')
             
             for (j in leadingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
@@ -196,38 +197,21 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    // نفس isBoundaryPunctuation تماماً باستثناء الأقواس الهلالية ( )
-    // تُستخدم فقط عند تحديد حدود "النص الأساسي" داخل applyVisualSwapping
-    // كي تبقى الأقواس دائماً جزءاً من middleText وتُعالَج عبر fixParenthesesIsolation
-    // بدل آلية القلب اليدوي (mirrorArabicPunctuation) التي تُنتج عرضاً خاطئاً
-    // حين يكون القوس هو الحرف الحدّي الأول أو الأخير في الجملة كاملة
-    private fun isExtractableBoundaryPunctuation(c: Char): Boolean {
-        if (c == '(' || c == ')') return false
-        return isBoundaryPunctuation(c)
-    }
-
-    private fun fixParenthesesIsolation(text: CharSequence): CharSequence {
-        val s = text.toString()
-        if (!s.contains('(') && !s.contains(')')) return text
-        val sb = StringBuilder()
-        var i = 0
-        while (i < s.length) {
-            val c = s[i]
-            if (c == '(' || c == ')') {
-                sb.append('\u202A').append(c).append('\u202C')
-            } else {
-                sb.append(c)
-            }
-            i++
-        }
-        return sb.toString()
-    }
-
+    // الدالة الأصلية للرصد (تبقى كما هي تماماً لاصطياد الأسطر المشوشة)
     private fun isBoundaryPunctuation(c: Char): Boolean {
         return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
                c == '!' || c == '؟' || c == '?' ||
                c == '-' || c == '—' ||
                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+               c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
+               c.isWhitespace()
+    }
+
+    // الدالة الجديدة للاقتطاع (تستثني الأقواس لتبقى متماسكة ككتلة واحدة داخل middleText)
+    private fun isExtractableBoundaryPunctuation(c: Char): Boolean {
+        return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
+               c == '!' || c == '؟' || c == '?' ||
+               c == '-' || c == '—' ||
                c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
                c.isWhitespace()
     }
@@ -262,7 +246,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
             
-            builder.append('\u200F').append('\u202B').append(fixParenthesesIsolation(core)).append('\u202C').append('\u200F')
+            builder.append('\u200F').append('\u202B').append(core).append('\u202C').append('\u200F')
             
             if (hasCr) builder.append('\r')
         }
