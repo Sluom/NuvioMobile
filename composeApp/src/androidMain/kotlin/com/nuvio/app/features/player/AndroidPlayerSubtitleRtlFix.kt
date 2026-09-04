@@ -218,7 +218,9 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(line)
                 continue
             }
-            builder.append('\u202B').append(core).append('\u202C')
+            
+            builder.append('\u200F').append('\u202B').append(core).append('\u202C').append('\u200F')
+            
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
