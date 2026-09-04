@@ -84,22 +84,64 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
+    // =========================================================================
+    // عالم الترجمات المشوشة: لم يُلمَس أي حرف منه - يبقى كما يعمل بشكل مثالي
+    // =========================================================================
+
+    // =========================================================================
+    // بوابة التوجيه (Router): تقرر أي عالم يستقبل كل سطر
+    // تم تصحيحها فقط عبر دالتين مساعدتين جديدتين ومستقلتين أدناه،
+    // دون المساس بـ isBoundaryPunctuation المُستخدمة داخل applyVisualSwapping
+    // =========================================================================
+
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
-        if (isBuiltInSubtitle) return false
+        if (isBuiltInSubtitle) return false // الترجمة المدمجة تعتبر سليمة دائماً
         
         val lines = text.splitByNewlines()
         for (line in lines) {
             val trimmed = line.trim()
             if (trimmed.isEmpty()) continue
             
-            val firstChar = trimmed.first()
-            val lastChar = trimmed.last()
-            
-            if (isBoundaryPunctuation(firstChar) || isBoundaryPunctuation(lastChar)) {
+            // إذا كان السطر يبدأ أو ينتهي برموز محايدة مكشوفة فعلاً (وليست
+            // استخداماً طبيعياً شائعاً كنقطة نهاية الجملة أو شرطة حوار)،
+            // نعتبره عشوائياً ويحتاج للتبديل
+            if (hasMessyLeadingBoundary(trimmed) || hasMessyTrailingBoundary(trimmed)) {
                 return true
             }
         }
         return false
+    }
+
+    // تُستخدم حصراً هنا لتصنيف "هل هذا السطر مشوش؟" - لا علاقة لها بمنطق
+    // applyVisualSwapping ولا تُستدعى منه
+    private fun hasMessyLeadingBoundary(trimmed: CharSequence): Boolean {
+        val firstChar = trimmed.first()
+        if (!isBoundaryPunctuation(firstChar)) return false
+
+        // شرطة حوار طبيعية في بداية السطر ("- مرحبا") ليست عطلاً
+        if ((firstChar == '-' || firstChar == '—') &&
+            trimmed.length > 1 &&
+            trimmed[1] == ' '
+        ) {
+            return false
+        }
+
+        return true
+    }
+
+    private fun hasMessyTrailingBoundary(trimmed: CharSequence): Boolean {
+        val lastChar = trimmed.last()
+        if (!isBoundaryPunctuation(lastChar)) return false
+
+        // نقطة نهاية جملة طبيعية واحدة (وليست جزءاً من سلسلة رموز مثل "..." أو "،.")
+        // ليست عطلاً
+        if (lastChar == '.' &&
+            (trimmed.length == 1 || !isBoundaryPunctuation(trimmed[trimmed.length - 2]))
+        ) {
+            return false
+        }
+
+        return true
     }
 
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
@@ -176,7 +218,11 @@ internal object AndroidPlayerSubtitleRtlFix {
         else -> c
     }
 
-    // تم التعديل هنا: استخدام U+200F في بداية ونهاية النص السليم لضمان محاذاة علامات الترقيم
+    // =========================================================================
+    // عالم الترجمات السليمة: تم إصلاحه - الرجوع لتضمين RLE/PDF القوي والمستقر
+    // بدل RLM الضعيفة (كانت السبب في المظهر المبعثر أحياناً)
+    // =========================================================================
+
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
@@ -194,8 +240,9 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(line)
                 continue
             }
-            // إضافة محرف التوجيه (RLM) لفرض سياق اليمين إلى اليسار
-            builder.append('\u200F').append(core).append('\u200F')
+            // RLE...PDF: تضمين صريح ومغلق يضمن نتيجة ثابتة بغض النظر عن
+            // أي محتوى لاتيني/أرقام مدمجة أو سياق مجاور
+            builder.append('\u202B').append(core).append('\u202C')
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
