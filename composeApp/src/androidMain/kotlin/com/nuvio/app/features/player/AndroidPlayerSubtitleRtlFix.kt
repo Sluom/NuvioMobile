@@ -167,7 +167,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
             
             if (start >= end) {
-                builder.append(cleanCore)
+                builder.append(fixParenthesesIsolation(cleanCore))
                 if (hasQuestionMark) builder.append('؟')
                 if (hasCr) builder.append('\r')
                 continue
@@ -181,7 +181,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
             
-            builder.append('\u202B').append(middleText).append('\u202C')
+            builder.append('\u202B').append(fixParenthesesIsolation(middleText)).append('\u202C')
             
             for (j in leadingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
@@ -194,6 +194,23 @@ internal object AndroidPlayerSubtitleRtlFix {
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
+    }
+
+    private fun fixParenthesesIsolation(text: CharSequence): CharSequence {
+        val s = text.toString()
+        if (!s.contains('(') && !s.contains(')')) return text
+        val sb = StringBuilder()
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '(' || c == ')') {
+                sb.append('\u202A').append(c).append('\u202C')
+            } else {
+                sb.append(c)
+            }
+            i++
+        }
+        return sb.toString()
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
@@ -235,7 +252,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
             
-            builder.append('\u200F').append('\u202B').append(core).append('\u202C').append('\u200F')
+            builder.append('\u200F').append('\u202B').append(fixParenthesesIsolation(core)).append('\u202C').append('\u200F')
             
             if (hasCr) builder.append('\r')
         }
