@@ -165,6 +165,41 @@ internal object AndroidPlayerSubtitleRtlFix {
             
             var end = cleanCore.length
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
+
+            // Prevent a matched parenthesis pair from being split between
+            // the trimmed boundary punctuation and the embedded middle
+            // text (e.g. "يا (ماك)" where only the closing ')' sits on the
+            // true boundary while the '(' is interior). A split pair ends
+            // up mirrored twice — once automatically by the RLE/PDF
+            // embedding for the interior member, once manually for the
+            // extracted member — producing a duplicated-looking bracket.
+            // If the interior span has an unmatched paren, pull its
+            // partner back in from whichever side holds it. Lines with no
+            // parens (the vast majority) have depth == 0 immediately and
+            // are completely unaffected.
+            run {
+                var depth = 0
+                for (idx in start until end) {
+                    when (cleanCore[idx]) {
+                        '(' -> depth++
+                        ')' -> depth--
+                    }
+                }
+                while (depth > 0 && end < cleanCore.length) {
+                    when (cleanCore[end]) {
+                        ')' -> { depth--; end++ }
+                        '(' -> { depth++; end++ }
+                        else -> return@run
+                    }
+                }
+                while (depth < 0 && start > 0) {
+                    when (cleanCore[start - 1]) {
+                        '(' -> { depth++; start-- }
+                        ')' -> { depth--; start-- }
+                        else -> return@run
+                    }
+                }
+            }
             
             if (start >= end) {
                 builder.append(cleanCore)
