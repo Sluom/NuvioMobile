@@ -114,10 +114,10 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',') {
+        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
-                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?') {
+                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?' || prevChar == ':') {
                     return true
                 }
             }
@@ -201,25 +201,85 @@ internal object AndroidPlayerSubtitleRtlFix {
             // partner back in from whichever side holds it. Lines with no
             // parens (the vast majority) have depth == 0 immediately and
             // are completely unaffected.
+            // Prevent a matched bracket/quote pair from being split between
+            // the trimmed boundary punctuation and the embedded middle
+            // text — the same issue fixed earlier for '(' ')', generalized
+            // to every bidirectionally-mirrored pair: [] {} «» and the
+            // curly/smart quotes “” ‘’. (Straight '"' and '!' don't need
+            // this — their glyph doesn't change with direction, so a split
+            // there is invisible.) A split pair ends up mirrored twice —
+            // once automatically by the RLE/PDF embedding for the interior
+            // member, once manually for the extracted member — producing a
+            // duplicated-looking mark. If the interior span has an
+            // unmatched member of any of these pairs, pull its partner
+            // back in from whichever side holds it. Lines with none of
+            // these characters (the vast majority) are completely
+            // unaffected.
             run {
-                var depth = 0
+                val openToClose = mapOf(
+                    '(' to ')', '[' to ']', '{' to '}',
+                    '«' to '»', '“' to '”', '‘' to '’'
+                )
+                val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
+                val depths = HashMap<Char, Int>()
+
                 for (idx in start until end) {
-                    when (cleanCore[idx]) {
-                        '(' -> depth++
-                        ')' -> depth--
+                    val c = cleanCore[idx]
+                    if (c in openToClose) {
+                        depths[c] = (depths[c] ?: 0) + 1
+                    } else if (c in closeToOpen) {
+                        val o = closeToOpen.getValue(c)
+                        depths[o] = (depths[o] ?: 0) - 1
                     }
                 }
-                while (depth > 0 && end < cleanCore.length) {
-                    when (cleanCore[end]) {
-                        ')' -> { depth--; end++ }
-                        '(' -> { depth++; end++ }
+
+                while (end < cleanCore.length) {
+                    val c = cleanCore[end]
+                    val openForC = closeToOpen[c]
+                    when {
+                        openForC != null && (depths[openForC] ?: 0) > 0 -> {
+                            depths[openForC] = depths.getValue(openForC) - 1
+                            end++
+                        }
+                        c in openToClose && (depths[c] ?: 0) > 0 -> {
+                            depths[c] = depths.getValue(c) + 1
+                            end++
+                        }
                         else -> return@run
                     }
                 }
-                while (depth < 0 && start > 0) {
-                    when (cleanCore[start - 1]) {
-                        '(' -> { depth++; start-- }
-                        ')' -> { depth--; start-- }
+            }
+            run {
+                val openToClose = mapOf(
+                    '(' to ')', '[' to ']', '{' to '}',
+                    '«' to '»', '“' to '”', '‘' to '’'
+                )
+                val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
+                val depths = HashMap<Char, Int>()
+
+                for (idx in start until end) {
+                    val c = cleanCore[idx]
+                    if (c in openToClose) {
+                        depths[c] = (depths[c] ?: 0) + 1
+                    } else if (c in closeToOpen) {
+                        val o = closeToOpen.getValue(c)
+                        depths[o] = (depths[o] ?: 0) - 1
+                    }
+                }
+
+                while (start > 0) {
+                    val c = cleanCore[start - 1]
+                    val closeForC = openToClose[c]
+                    when {
+                        c in closeToOpen && (depths[closeToOpen.getValue(c)] ?: 0) < 0 -> {
+                            val o = closeToOpen.getValue(c)
+                            depths[o] = depths.getValue(o) + 1
+                            start--
+                        }
+                        closeForC != null && (depths[c] ?: 0) < 0 -> {
+                            depths[c] = depths.getValue(c) - 1
+                            start--
+                        }
                         else -> return@run
                     }
                 }
