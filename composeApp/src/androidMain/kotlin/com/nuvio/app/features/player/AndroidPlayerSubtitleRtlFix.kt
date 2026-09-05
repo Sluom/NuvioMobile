@@ -154,7 +154,31 @@ internal object AndroidPlayerSubtitleRtlFix {
             for (k in 0 until rawCore.length) {
                 val ch = rawCore[k]
                 if (ch == '؟' || ch == '?') {
-                    hasQuestionMark = true
+                    // Normally '؟'/'?' are pulled out and reinserted at a
+                    // single fixed position later, regardless of where they
+                    // originally sat relative to neighboring punctuation.
+                    // That's fine when the mark stands alone, but if it's
+                    // directly touching another boundary character (e.g. a
+                    // closing quote or '!') on either side, pulling it out
+                    // separates it from that neighbor and scrambles the
+                    // order. In that specific case, leave it in cleanCore so
+                    // it instead flows through the same ordinary start/end
+                    // trim (and mirroring) used for '!' and quotes, which
+                    // preserves its true adjacency. A lone '؟'/'?' (the
+                    // common case) is unaffected — neither neighbor is
+                    // boundary punctuation, so it's still extracted exactly
+                    // as before.
+                    val prevIsTouching = k > 0 &&
+                        isBoundaryPunctuation(rawCore[k - 1]) &&
+                        !rawCore[k - 1].isWhitespace()
+                    val nextIsTouching = k + 1 < rawCore.length &&
+                        isBoundaryPunctuation(rawCore[k + 1]) &&
+                        !rawCore[k + 1].isWhitespace()
+                    if (prevIsTouching || nextIsTouching) {
+                        cleanCore.append(ch)
+                    } else {
+                        hasQuestionMark = true
+                    }
                 } else {
                     cleanCore.append(ch)
                 }
