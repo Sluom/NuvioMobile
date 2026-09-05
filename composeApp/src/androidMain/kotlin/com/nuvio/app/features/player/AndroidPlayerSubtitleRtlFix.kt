@@ -114,7 +114,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':') {
+        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':' || lastChar == '…') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
                 if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?' || prevChar == ':') {
@@ -269,15 +269,14 @@ internal object AndroidPlayerSubtitleRtlFix {
 
                 while (start > 0) {
                     val c = cleanCore[start - 1]
-                    val closeForC = openToClose[c]
                     when {
-                        c in closeToOpen && (depths[closeToOpen.getValue(c)] ?: 0) < 0 -> {
-                            val o = closeToOpen.getValue(c)
-                            depths[o] = depths.getValue(o) + 1
+                        c in openToClose && (depths[c] ?: 0) < 0 -> {
+                            depths[c] = depths.getValue(c) + 1
                             start--
                         }
-                        closeForC != null && (depths[c] ?: 0) < 0 -> {
-                            depths[c] = depths.getValue(c) - 1
+                        c in closeToOpen && (depths[closeToOpen.getValue(c)] ?: 0) < 0 -> {
+                            val o = closeToOpen.getValue(c)
+                            depths[o] = depths.getValue(o) - 1
                             start--
                         }
                         else -> return@run
@@ -333,6 +332,10 @@ internal object AndroidPlayerSubtitleRtlFix {
         '}' -> '{'
         '«' -> '»'
         '»' -> '«'
+        '“' -> '”'
+        '”' -> '“'
+        '‘' -> '’'
+        '’' -> '‘'
         else -> c
     }
 
