@@ -103,15 +103,10 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val firstChar = text.first()
         
-        // Dialogue-dash family: never treated as a messiness signal when it
-        // opens a line, since it legitimately marks a change of speaker.
-        // Added: en dash (–), hyphen (‐), figure dash (‒) — same role as
-        // the existing '-' and '—'.
         if (firstChar == '-' || firstChar == '—' || firstChar == '–' || firstChar == '‐' || firstChar == '‒') {
             return false
         }
         
-        // استثناء علامات الاقتباس من اعتبارها مؤشراً لترجمة مبعثرة
         if (firstChar == '"' || firstChar == '”' || firstChar == '“' || firstChar == '«') {
             return false
         }
@@ -123,9 +118,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        // Added: Arabic semicolon (؛) — plays the same end-of-clause role
-        // as '.' / ':' / '،' here, both as the trailing char itself and as
-        // the "touching another boundary mark" check below.
         if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':' || lastChar == '…' || lastChar == '؛') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
@@ -139,18 +131,15 @@ internal object AndroidPlayerSubtitleRtlFix {
         return isBoundaryPunctuation(lastChar)
     }
     
-    // دالة جديدة لتثبيت علامات الترقيم والأقواس المحايدة ومنعها من بعثرة السطر أو الإقران الخاطئ
     private fun stabilizeRtlText(text: CharSequence): CharSequence {
         val sb = StringBuilder(text.length + 16)
         for (i in 0 until text.length) {
             val c = text[i]
             sb.append(c)
             
-            // حقن محرف RLM بقوة لتثبيت الأقواس
             if (c == '"' || c == '”' || c == '“' || c == '«' || c == '»') {
                 sb.append('\u200F')
             } 
-            // تثبيت النقاط والفواصل فقط إذا لم تكن محصورة بين أرقام أو حروف إنجليزية
             else if (c == '.' || c == '،' || c == ',' || c == '؛' || c == '-' || c == '؟' || c == '?') {
                 val prev = if (i > 0) text[i - 1] else ' '
                 val next = if (i < text.length - 1) text[i + 1] else ' '
@@ -211,19 +200,14 @@ internal object AndroidPlayerSubtitleRtlFix {
             
             var start = 0
             while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) {
-                val c = cleanCore[start]
-                if (c == '.' || c == '،' || c == ',' || c == '؛' || c == ':') break
                 start++
             }
             
             var end = cleanCore.length
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) {
-                val c = cleanCore[end - 1]
-                if (c == '.' || c == '،' || c == ',' || c == '؛' || c == ':') break
                 end--
             }
 
-            // خوارزمية مُحسنة لاسترداد كافة أشكال علامات الاقتباس (المستقيمة والمائلة)
             var symmetricQuotesCount = 0
             for (idx in start until end) {
                 val c = cleanCore[idx]
@@ -311,8 +295,9 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             if (start >= end) {
-                builder.append(cleanCore)
+                builder.append('\u200F').append(cleanCore)
                 if (hasQuestionMark) builder.append('؟')
+                builder.append('\u200F')
                 if (hasCr) builder.append('\r')
                 continue
             }
@@ -320,9 +305,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             val leadingPunc = cleanCore.subSequence(0, start)
             val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
             
-            // تطبيق المُثبّت على مسار الترجمات المبعثرة لمنع تبعثر المنتصف
             val middleText = cleanCore.subSequence(start, end)
             val stabilizedMiddle = stabilizeRtlText(middleText)
+            
+            builder.append('\u200F')
             
             for (j in trailingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
@@ -337,6 +323,8 @@ internal object AndroidPlayerSubtitleRtlFix {
             if (hasQuestionMark) {
                 builder.append('؟')
             }
+            
+            builder.append('\u200F')
             
             if (hasCr) builder.append('\r')
         }
@@ -399,7 +387,6 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
             
-            // تطبيق المُثبّت الجذري على مسار الترجمات السليمة لمنع الـ UBA Pairing والتبعثر
             val stabilizedCore = stabilizeRtlText(core)
             builder.append('\u200F').append('\u202B').append(stabilizedCore).append('\u202C').append('\u200F')
             
