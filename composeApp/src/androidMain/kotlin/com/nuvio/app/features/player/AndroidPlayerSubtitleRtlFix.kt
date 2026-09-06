@@ -107,27 +107,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
-        if (firstChar == '"' || firstChar == '\'' || firstChar == '«' || firstChar == '”' || firstChar == '“' || 
-            firstChar == '„' || firstChar == '‚' || firstChar == '＂' || firstChar == '′' || firstChar == '″' || 
-            firstChar == '‘' || firstChar == '’') {
-            return false
-        }
-        
-        if (firstChar == '(' || firstChar == '[' || firstChar == '{' || firstChar == '「' || firstChar == '‹' || 
-            firstChar == '〈' || firstChar == '【') {
-            return false
-        }
-            
-        if (firstChar == '♪' || firstChar == '♫' || firstChar == '~') {
-            return false
-        }
-        
-        // حماية الثلاث نقاط من التفكيك الخاطئ
-        if (firstChar == '…') return false
-        if (firstChar == '.') {
-            if (text.length >= 2 && text[1] == '.') return false
-        }
-        
         return isBoundaryPunctuation(firstChar)
     }
 
@@ -135,31 +114,13 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || 
-            lastChar == ',' || lastChar == ':' || lastChar == '…' || lastChar == '؛' || lastChar == ';' || 
-            lastChar == '٪' || lastChar == '%') {
+        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':' || lastChar == '…' || lastChar == '؛') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
-                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?' || 
-                    prevChar == ':' || prevChar == '؛') {
+                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?' || prevChar == ':' || prevChar == '؛') {
                     return true
                 }
             }
-            return false
-        }
-        
-        if (lastChar == '"' || lastChar == '\'' || lastChar == '»' || lastChar == '”' || lastChar == '“' || 
-            lastChar == '„' || lastChar == '‚' || lastChar == '＂' || lastChar == '′' || lastChar == '″' || 
-            lastChar == '‘' || lastChar == '’') {
-            return false
-        }
-            
-        if (lastChar == ')' || lastChar == ']' || lastChar == '}' || lastChar == '」' || lastChar == '›' || 
-            lastChar == '〉' || lastChar == '】') {
-            return false
-        }
-            
-        if (lastChar == '♪' || lastChar == '♫' || lastChar == '~') {
             return false
         }
         
@@ -251,30 +212,37 @@ internal object AndroidPlayerSubtitleRtlFix {
                 }
             }
             
+            // --- الإضافة الوحيدة الجراحية هنا: حماية علامة الاقتباس المستقيمة (") ---
+            var totalStraightQuotes = 0
+            for (k in 0 until cleanCore.length) {
+                if (cleanCore[k] == '"') totalStraightQuotes++
+            }
+            
             var start = 0
             while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) {
+                if (cleanCore[start] == '"' && totalStraightQuotes % 2 != 0) break
                 start++
             }
             
             var end = cleanCore.length
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) {
+                if (cleanCore[end - 1] == '"' && totalStraightQuotes % 2 != 0) break
                 end--
             }
 
-            var symmetricQuotesCount = 0
+            var straightQuotesInMiddle = 0
             for (idx in start until end) {
-                val c = cleanCore[idx]
-                if (c == '"' || c == '”' || c == '“') symmetricQuotesCount++
+                if (cleanCore[idx] == '"') straightQuotesInMiddle++
             }
-
-            while (end < cleanCore.length && (cleanCore[end] == '"' || cleanCore[end] == '”' || cleanCore[end] == '“') && symmetricQuotesCount % 2 != 0) {
-                symmetricQuotesCount++
+            while (end < cleanCore.length && cleanCore[end] == '"' && straightQuotesInMiddle % 2 != 0) {
+                straightQuotesInMiddle++
                 end++
             }
-            while (start > 0 && (cleanCore[start - 1] == '"' || cleanCore[start - 1] == '”' || cleanCore[start - 1] == '“') && symmetricQuotesCount % 2 != 0) {
-                symmetricQuotesCount++
+            while (start > 0 && cleanCore[start - 1] == '"' && straightQuotesInMiddle % 2 != 0) {
+                straightQuotesInMiddle++
                 start--
             }
+            // ------------------------------------------------------------------------
 
             run {
                 val openToClose = mapOf(
@@ -347,11 +315,9 @@ internal object AndroidPlayerSubtitleRtlFix {
                 }
             }
             
-            // هنا الإرجاع الأصلي 100% لمكان طباعة علامة الاستفهام داخل الغلاف
             if (start >= end) {
-                builder.append('\u200F').append('\u202B').append(cleanCore)
+                builder.append(cleanCore)
                 if (hasQuestionMark) builder.append('؟')
-                builder.append('\u202C').append('\u200F')
                 if (hasCr) builder.append('\r')
                 continue
             }
@@ -362,24 +328,19 @@ internal object AndroidPlayerSubtitleRtlFix {
             val middleText = cleanCore.subSequence(start, end)
             val stabilizedMiddle = stabilizeRtlText(middleText)
             
-            builder.append('\u200F').append('\u202B')
-            
             for (j in trailingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
             
-            builder.append(stabilizedMiddle)
+            builder.append('\u202B').append(stabilizedMiddle).append('\u202C')
             
             for (j in leadingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
             }
             
-            // هنا الإرجاع الأصلي 100% لمكان طباعة علامة الاستفهام داخل الغلاف
             if (hasQuestionMark) {
                 builder.append('؟')
             }
-            
-            builder.append('\u202C').append('\u200F')
             
             if (hasCr) builder.append('\r')
         }
@@ -387,15 +348,14 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
-        // النجمة (*) ما زالت هنا لنجاحها
         return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
                c == '!' || c == '؟' || c == '?' ||
                c == '-' || c == '—' ||
                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
                c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
                c == '„' || c == '‚' || c == '＂' || c == '′' || c == '″' ||
-               c == '♪' || c == '♫' || c == '~' ||
-               c == '؛' || c == '*' ||
+               c == '♪' || c == '♫' ||
+               c == '؛' || c == '*' || // النجمة تمت إضافتها هنا
                c == '–' || c == '‐' || c == '‒' ||
                c == '‹' || c == '›' || c == '「' || c == '」' || c == '〈' || c == '〉' || c == '【' || c == '】' ||
                c.isWhitespace()
@@ -687,6 +647,8 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
+    // NOTE: Hebrew/general-RTL punctuation sets below are intentionally
+    // left untouched — Hebrew handling is out of scope for this change.
     private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
     private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
 }
