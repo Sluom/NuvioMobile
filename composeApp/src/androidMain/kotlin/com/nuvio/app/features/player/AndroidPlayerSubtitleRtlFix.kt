@@ -348,7 +348,16 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    // تمت توسعة هذه المصفوفة لتشمل الأقواس الذكية والمائلة لحل مشكلة "الصين"
+    // Interior (mid-line/mid-sentence) neutral marks that have no
+    // explicit RLE/PDF embedding of their own — unlike the leading/
+    // trailing punctuation, which is fully extracted, mirrored, and
+    // wrapped by the existing logic. Pinning each one individually with
+    // invisible RLM (right-to-left mark, U+200F) on both sides anchors
+    // its resolved direction to RTL without altering its glyph (none of
+    // these are Bidi-mirrored characters) or its position in the text.
+    // Purely additive: it only touches interior text that was already
+    // passed through untouched before, and RLM is invisible, so any
+    // occurrence that already rendered correctly is unaffected.
     private val INTERIOR_PIN_CHARS = setOf(
         '"', '„', '‚', '＂', '′', '″', '،',
         '”', '“', '‘', '’', '«', '»', '‹', '›'
