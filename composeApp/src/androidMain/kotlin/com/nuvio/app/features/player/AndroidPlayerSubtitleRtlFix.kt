@@ -107,9 +107,22 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
-        if (firstChar == '"' || firstChar == '”' || firstChar == '“' || firstChar == '«') {
+        if (firstChar == '"' || firstChar == '”' || firstChar == '“' || firstChar == '«' || firstChar == '\'' ||
+            firstChar == '„' || firstChar == '‚' || firstChar == '＂' || firstChar == '′' || firstChar == '″' || 
+            firstChar == '‘' || firstChar == '’') {
             return false
         }
+        
+        if (firstChar == '(' || firstChar == '[' || firstChar == '{' || firstChar == '「' || firstChar == '‹' || 
+            firstChar == '〈' || firstChar == '【') {
+            return false
+        }
+            
+        if (firstChar == '♪' || firstChar == '♫' || firstChar == '~') {
+            return false
+        }
+        
+        // تم إلغاء استثناء النقاط من هنا: أي جملة تبدأ بنقطة أو نقاط متتالية ستعتبر مبعثرة فوراً
         
         return isBoundaryPunctuation(firstChar)
     }
@@ -118,13 +131,31 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':' || lastChar == '…' || lastChar == '؛') {
+        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || 
+            lastChar == ',' || lastChar == ':' || lastChar == '…' || lastChar == '؛' || lastChar == ';' || 
+            lastChar == '٪' || lastChar == '%') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
-                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?' || prevChar == ':' || prevChar == '؛') {
+                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?' || 
+                    prevChar == ':' || prevChar == '؛') {
                     return true
                 }
             }
+            return false
+        }
+        
+        if (lastChar == '"' || lastChar == '\'' || lastChar == '»' || lastChar == '”' || lastChar == '“' || 
+            lastChar == '„' || lastChar == '‚' || lastChar == '＂' || lastChar == '′' || lastChar == '″' || 
+            lastChar == '‘' || lastChar == '’') {
+            return false
+        }
+            
+        if (lastChar == ')' || lastChar == ']' || lastChar == '}' || lastChar == '」' || lastChar == '›' || 
+            lastChar == '〉' || lastChar == '】') {
+            return false
+        }
+            
+        if (lastChar == '♪' || lastChar == '♫' || lastChar == '~') {
             return false
         }
         
@@ -166,7 +197,12 @@ internal object AndroidPlayerSubtitleRtlFix {
                 val isNextDigitOrLatin = next.isDigit() || next in 'a'..'z' || next in 'A'..'Z'
                 
                 if (!isPrevDigitOrLatin && !isNextDigitOrLatin) {
-                    sb.append('\u200F')
+                    // حماية جمالية: منع التثبيت الداخلي بين النقاط المتتالية لتبقى متراصة
+                    if (c == '.' && next == '.') {
+                        // لا تفعل شيئاً
+                    } else {
+                        sb.append('\u200F')
+                    }
                 }
             }
         }
@@ -226,7 +262,6 @@ internal object AndroidPlayerSubtitleRtlFix {
                 end--
             }
 
-            // العودة للطريقة المضمونة: دمج كافة أشكال الاقتباس في العداد لإنقاذ الأخطاء المطبعية المختلطة
             var symmetricQuotesCount = 0
             for (idx in start until end) {
                 val c = cleanCore[idx]
@@ -314,9 +349,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             if (start >= end) {
-                builder.append('\u200F').append(cleanCore)
+                // دمج الغلاف ليشمل كامل السطر
+                builder.append('\u200F').append('\u202B').append(cleanCore)
                 if (hasQuestionMark) builder.append('؟')
-                builder.append('\u200F')
+                builder.append('\u202C').append('\u200F')
                 if (hasCr) builder.append('\r')
                 continue
             }
@@ -327,13 +363,14 @@ internal object AndroidPlayerSubtitleRtlFix {
             val middleText = cleanCore.subSequence(start, end)
             val stabilizedMiddle = stabilizeRtlText(middleText)
             
-            builder.append('\u200F')
+            // توسيع منطقة الأمان: التغليف يبدأ من هنا ليحتوي الشارحة والأقواس المقلوبة
+            builder.append('\u200F').append('\u202B')
             
             for (j in trailingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
             
-            builder.append('\u202B').append(stabilizedMiddle).append('\u202C')
+            builder.append(stabilizedMiddle)
             
             for (j in leadingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
@@ -343,7 +380,8 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append('؟')
             }
             
-            builder.append('\u200F')
+            // التغليف ينتهي هنا لضمان معاملة السطر ككتلة يمينية واحدة
+            builder.append('\u202C').append('\u200F')
             
             if (hasCr) builder.append('\r')
         }
