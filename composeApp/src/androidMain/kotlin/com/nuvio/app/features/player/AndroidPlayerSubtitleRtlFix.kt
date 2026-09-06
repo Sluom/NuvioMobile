@@ -18,7 +18,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
 
         if (containsArabic(text)) {
-            // 1. معالجة علامات الاقتباس المفصولة استباقياً
+            // 1. معالجة علامات الاقتباس المفصولة استباقياً مع الحفاظ على التنسيق
             text = fixOrphanedDialogQuotes(text)
 
             val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
@@ -88,35 +88,61 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun fixOrphanedDialogQuotes(text: CharSequence): CharSequence {
-        val lines = text.splitByNewlines().map { it.toString() }.toMutableList()
+        val lines = text.splitByNewlines().toMutableList()
         if (lines.size < 2) return text
 
-        // أنواع علامات الاقتباس التي يتم فصلها خطأً في الحوارات
         val quoteChars = listOf('"', '”', '“', '«', '»')
-
         var modified = false
-        for (q in quoteChars) {
-            val quoteCount = text.count { it == q }
-            if (quoteCount != 2) continue
 
-            val firstQuoteLineIdx = lines.indexOfFirst { it.contains(q) }
-            val lastQuoteLineIdx = lines.indexOfLast { it.contains(q) }
+        val firstTextLineIdx = lines.indexOfFirst { it.trim().isNotEmpty() }
+        val lastTextLineIdx = lines.indexOfLast { it.trim().isNotEmpty() }
 
-            if (firstQuoteLineIdx != -1 && lastQuoteLineIdx != -1 && firstQuoteLineIdx != lastQuoteLineIdx) {
-                val l1 = lines[firstQuoteLineIdx].trim()
-                val l2 = lines[lastQuoteLineIdx].trim()
+        if (firstTextLineIdx != -1 && lastTextLineIdx != -1 && firstTextLineIdx != lastTextLineIdx) {
+            val l1 = lines[firstTextLineIdx]
+            val l2 = lines[lastTextLineIdx]
 
-                // إذا كان السطر الأول ينتهي بالاقتباس والثاني يبدأ به، نعكس أماكنها
-                if (l1.endsWith(q) && l2.startsWith(q)) {
-                    lines[firstQuoteLineIdx] = q.toString() + l1.substring(0, l1.length - 1).trim()
-                    lines[lastQuoteLineIdx] = l2.substring(1).trim() + q.toString()
+            var l1End = l1.length - 1
+            while (l1End >= 0 && l1[l1End].isWhitespace()) l1End--
+            
+            var l2Start = 0
+            while (l2Start < l2.length && l2[l2Start].isWhitespace()) l2Start++
+
+            if (l1End >= 0 && l2Start < l2.length) {
+                val c1 = l1[l1End]
+                val c2 = l2[l2Start]
+                
+                if (quoteChars.contains(c1) && quoteChars.contains(c2)) {
+                    val q1 = c1.toString()
+                    val q2 = c2.toString()
+                    
+                    val l1Core = l1.subSequence(0, l1End)
+                    val l2Core = l2.subSequence(l2Start + 1, l2.length)
+
+                    val newL1 = SpannableStringBuilder()
+                        .append(q1)
+                        .append(l1Core)
+                        .append(l1.subSequence(l1End + 1, l1.length))
+                        
+                    val newL2 = SpannableStringBuilder()
+                        .append(l2.subSequence(0, l2Start))
+                        .append(l2Core)
+                        .append(q2)
+
+                    lines[firstTextLineIdx] = newL1
+                    lines[lastTextLineIdx] = newL2
                     modified = true
-                    break
                 }
             }
         }
 
-        return if (modified) lines.joinToString("\n") else text
+        if (!modified) return text
+        
+        val out = if (text is Spanned) SpannableStringBuilder() else StringBuilder()
+        for (i in lines.indices) {
+            if (i > 0) out.append('\n')
+            out.append(lines[i])
+        }
+        return out
     }
 
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
@@ -196,20 +222,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             for (k in 0 until rawCore.length) {
                 val ch = rawCore[k]
                 if (ch == '؟' || ch == '?') {
-                    // Normally '؟'/'?' are pulled out and reinserted at a
-                    // single fixed position later, regardless of where they
-                    // originally sat relative to neighboring punctuation.
-                    // That's fine when the mark stands alone, but if it's
-                    // directly touching another boundary character (e.g. a
-                    // closing quote or '!') on either side, pulling it out
-                    // separates it from that neighbor and scrambles the
-                    // order. In that specific case, leave it in cleanCore so
-                    // it instead flows through the same ordinary start/end
-                    // trim (and mirroring) used for '!' and quotes, which
-                    // preserves its true adjacency. A lone '؟'/'?' (the
-                    // common case) is unaffected — neither neighbor is
-                    // boundary punctuation, so it's still extracted exactly
-                    // as before.
                     val prevIsTouching = k > 0 &&
                         isBoundaryPunctuation(rawCore[k - 1]) &&
                         !rawCore[k - 1].isWhitespace()
@@ -232,33 +244,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             var end = cleanCore.length
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
 
-            // Prevent a matched parenthesis pair from being split between
-            // the trimmed boundary punctuation and the embedded middle
-            // text (e.g. "يا (ماك)" where only the closing ')' sits on the
-            // true boundary while the '(' is interior). A split pair ends
-            // up mirrored twice — once automatically by the RLE/PDF
-            // embedding for the interior member, once manually for the
-            // extracted member — producing a duplicated-looking bracket.
-            // If the interior span has an unmatched paren, pull its
-            // partner back in from whichever side holds it. Lines with no
-            // parens (the vast majority) have depth == 0 immediately and
-            // are completely unaffected.
-            // Prevent a matched bracket/quote pair from being split between
-            // the trimmed boundary punctuation and the embedded middle
-            // text — the same issue fixed earlier for '(' ')', generalized
-            // to every bidirectionally-mirrored pair: [] {} «» and the
-            // curly/smart quotes “” ‘’, plus (added) the angle/corner
-            // bracket pairs ‹› 「」 〈〉 【】, which behave identically —
-            // always open/close pairs, never a standalone mark. (Straight
-            // '"' and '!' don't need this — their glyph doesn't change
-            // with direction, so a split there is invisible.) A split pair
-            // ends up mirrored twice — once automatically by the RLE/PDF
-            // embedding for the interior member, once manually for the
-            // extracted member — producing a duplicated-looking mark. If
-            // the interior span has an unmatched member of any of these
-            // pairs, pull its partner back in from whichever side holds
-            // it. Lines with none of these characters (the vast majority)
-            // are completely unaffected.
             run {
                 val openToClose = mapOf(
                     '(' to ')', '[' to ']', '{' to '}',
@@ -330,6 +315,28 @@ internal object AndroidPlayerSubtitleRtlFix {
                 }
             }
             
+            // New logic to prevent splitting identical quote pairs (like "China")
+            run {
+                val identicalQuotes = listOf('"', '\'', '”', '“', '„')
+                for (q in identicalQuotes) {
+                    val totalCount = cleanCore.count { it == q }
+                    if (totalCount > 0 && totalCount % 2 == 0) {
+                        var middleCount = 0
+                        for (idx in start until end) {
+                            if (cleanCore[idx] == q) middleCount++
+                        }
+                        if (middleCount % 2 != 0) {
+                            // Split pair detected! Pull the quote back inside.
+                            if (start > 0 && cleanCore[start - 1] == q) {
+                                start--
+                            } else if (end < cleanCore.length && cleanCore[end] == q) {
+                                end++
+                            }
+                        }
+                    }
+                }
+            }
+            
             if (start >= end) {
                 builder.append(cleanCore)
                 if (hasQuestionMark) builder.append('؟')
@@ -360,16 +367,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    // Interior (mid-line/mid-sentence) neutral marks that have no
-    // explicit RLE/PDF embedding of their own — unlike the leading/
-    // trailing punctuation, which is fully extracted, mirrored, and
-    // wrapped by the existing logic. Pinning each one individually with
-    // invisible RLM (right-to-left mark, U+200F) on both sides anchors
-    // its resolved direction to RTL without altering its glyph (none of
-    // these are Bidi-mirrored characters) or its position in the text.
-    // Purely additive: it only touches interior text that was already
-    // passed through untouched before, and RLM is invisible, so any
-    // occurrence that already rendered correctly is unaffected.
     private val INTERIOR_PIN_CHARS = setOf(
         '"', '„', '‚', '＂', '′', '″', '،', 
         '”', '“', '‘', '’', '«', '»', '‹', '›'
@@ -401,21 +398,10 @@ internal object AndroidPlayerSubtitleRtlFix {
                c == '-' || c == '—' ||
                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
                c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
-               // Added — behave like the existing '"' (start+mid+end,
-               // no pairing/mirroring): low/curly quote variants that show
-               // up unpaired in old subtitle files, fullwidth quote, prime
-               // marks used as informal single-quotes, and music notes.
                c == '„' || c == '‚' || c == '＂' || c == '′' || c == '″' ||
                c == '♪' || c == '♫' ||
-               // Added — behaves like the existing '.' / ':' (mid+end):
-               // Arabic semicolon.
                c == '؛' ||
-               // Added — behave like the existing '-' (start+mid, excluded
-               // from the leading-messiness check): en dash, hyphen,
-               // figure dash.
                c == '–' || c == '‐' || c == '‒' ||
-               // Added — behave like the existing «» (paired + mirrored):
-               // single angle quotes and CJK-style bracket pairs.
                c == '‹' || c == '›' || c == '「' || c == '」' || c == '〈' || c == '〉' || c == '【' || c == '】' ||
                c.isWhitespace()
     }
@@ -433,7 +419,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         '”' -> '“'
         '‘' -> '’'
         '’' -> '‘'
-        // Added — same pairing treatment as the existing «» / “” / ‘’.
         '‹' -> '›'
         '›' -> '‹'
         '「' -> '」'
@@ -707,8 +692,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    // NOTE: Hebrew/general-RTL punctuation sets below are intentionally
-    // left untouched — Hebrew handling is out of scope for this change.
     private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
     private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
 }
