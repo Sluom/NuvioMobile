@@ -12,12 +12,15 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
-        val text = cue.text ?: return cue
+        var text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
             return cue
         }
 
         if (containsArabic(text)) {
+            // 1. معالجة علامات الاقتباس المفصولة استباقياً
+            text = fixOrphanedDialogQuotes(text)
+
             val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
             
             val fixed = if (isMessy) {
@@ -26,7 +29,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 wrapArabicLines(text)
             }
             
-            if (fixed.contentEquals(text)) return cue
+            if (fixed.contentEquals(cue.text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
 
@@ -82,6 +85,38 @@ internal object AndroidPlayerSubtitleRtlFix {
             else -> 5_000_000L
         }
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
+    }
+
+    private fun fixOrphanedDialogQuotes(text: CharSequence): CharSequence {
+        val lines = text.splitByNewlines().map { it.toString() }.toMutableList()
+        if (lines.size < 2) return text
+
+        // أنواع علامات الاقتباس التي يتم فصلها خطأً في الحوارات
+        val quoteChars = listOf('"', '”', '“', '«', '»')
+
+        var modified = false
+        for (q in quoteChars) {
+            val quoteCount = text.count { it == q }
+            if (quoteCount != 2) continue
+
+            val firstQuoteLineIdx = lines.indexOfFirst { it.contains(q) }
+            val lastQuoteLineIdx = lines.indexOfLast { it.contains(q) }
+
+            if (firstQuoteLineIdx != -1 && lastQuoteLineIdx != -1 && firstQuoteLineIdx != lastQuoteLineIdx) {
+                val l1 = lines[firstQuoteLineIdx].trim()
+                val l2 = lines[lastQuoteLineIdx].trim()
+
+                // إذا كان السطر الأول ينتهي بالاقتباس والثاني يبدأ به، نعكس أماكنها
+                if (l1.endsWith(q) && l2.startsWith(q)) {
+                    lines[firstQuoteLineIdx] = q.toString() + l1.substring(0, l1.length - 1).trim()
+                    lines[lastQuoteLineIdx] = l2.substring(1).trim() + q.toString()
+                    modified = true
+                    break
+                }
+            }
+        }
+
+        return if (modified) lines.joinToString("\n") else text
     }
 
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
@@ -335,7 +370,10 @@ internal object AndroidPlayerSubtitleRtlFix {
     // Purely additive: it only touches interior text that was already
     // passed through untouched before, and RLM is invisible, so any
     // occurrence that already rendered correctly is unaffected.
-    private val INTERIOR_PIN_CHARS = setOf('"', '„', '‚', '＂', '′', '″', '،')
+    private val INTERIOR_PIN_CHARS = setOf(
+        '"', '„', '‚', '＂', '′', '″', '،', 
+        '”', '“', '‘', '’', '«', '»', '‹', '›'
+    )
 
     private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
         var found = false
