@@ -12,15 +12,12 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
-        var text = cue.text ?: return cue
+        val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
             return cue
         }
 
         if (containsArabic(text)) {
-            // 1. معالجة علامات الاقتباس المفصولة استباقياً مع الحفاظ على التنسيق
-            text = fixOrphanedDialogQuotes(text)
-
             val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
             
             val fixed = if (isMessy) {
@@ -87,64 +84,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun fixOrphanedDialogQuotes(text: CharSequence): CharSequence {
-        val lines = text.splitByNewlines().toMutableList()
-        if (lines.size < 2) return text
-
-        val quoteChars = listOf('"', '”', '“', '«', '»')
-        var modified = false
-
-        val firstTextLineIdx = lines.indexOfFirst { it.trim().isNotEmpty() }
-        val lastTextLineIdx = lines.indexOfLast { it.trim().isNotEmpty() }
-
-        if (firstTextLineIdx != -1 && lastTextLineIdx != -1 && firstTextLineIdx != lastTextLineIdx) {
-            val l1 = lines[firstTextLineIdx]
-            val l2 = lines[lastTextLineIdx]
-
-            var l1End = l1.length - 1
-            while (l1End >= 0 && l1[l1End].isWhitespace()) l1End--
-            
-            var l2Start = 0
-            while (l2Start < l2.length && l2[l2Start].isWhitespace()) l2Start++
-
-            if (l1End >= 0 && l2Start < l2.length) {
-                val c1 = l1[l1End]
-                val c2 = l2[l2Start]
-                
-                if (quoteChars.contains(c1) && quoteChars.contains(c2)) {
-                    val q1 = c1.toString()
-                    val q2 = c2.toString()
-                    
-                    val l1Core = l1.subSequence(0, l1End)
-                    val l2Core = l2.subSequence(l2Start + 1, l2.length)
-
-                    val newL1 = SpannableStringBuilder()
-                        .append(q1)
-                        .append(l1Core)
-                        .append(l1.subSequence(l1End + 1, l1.length))
-                        
-                    val newL2 = SpannableStringBuilder()
-                        .append(l2.subSequence(0, l2Start))
-                        .append(l2Core)
-                        .append(q2)
-
-                    lines[firstTextLineIdx] = newL1
-                    lines[lastTextLineIdx] = newL2
-                    modified = true
-                }
-            }
-        }
-
-        if (!modified) return text
-        
-        val out = if (text is Spanned) SpannableStringBuilder() else StringBuilder()
-        for (i in lines.indices) {
-            if (i > 0) out.append('\n')
-            out.append(lines[i])
-        }
-        return out
-    }
-
     private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
         if (isBuiltInSubtitle) return false
         
@@ -164,10 +103,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val firstChar = text.first()
         
-        // Dialogue-dash family: never treated as a messiness signal when it
-        // opens a line, since it legitimately marks a change of speaker.
-        // Added: en dash (–), hyphen (‐), figure dash (‒) — same role as
-        // the existing '-' and '—'.
         if (firstChar == '-' || firstChar == '—' || firstChar == '–' || firstChar == '‐' || firstChar == '‒') {
             return false
         }
@@ -179,9 +114,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        // Added: Arabic semicolon (؛) — plays the same end-of-clause role
-        // as '.' / ':' / '،' here, both as the trailing char itself and as
-        // the "touching another boundary mark" check below.
         if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':' || lastChar == '…' || lastChar == '؛') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
@@ -245,94 +177,60 @@ internal object AndroidPlayerSubtitleRtlFix {
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
 
             run {
-                val openToClose = mapOf(
-                    '(' to ')', '[' to ']', '{' to '}',
-                    '«' to '»', '“' to '”', '‘' to '’',
-                    '‹' to '›', '「' to '」', '〈' to '〉', '【' to '】'
-                )
-                val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
-                val depths = HashMap<Char, Int>()
-
-                for (idx in start until end) {
-                    val c = cleanCore[idx]
-                    if (c in openToClose) {
-                        depths[c] = (depths[c] ?: 0) + 1
-                    } else if (c in closeToOpen) {
-                        val o = closeToOpen.getValue(c)
-                        depths[o] = (depths[o] ?: 0) - 1
-                    }
-                }
-
-                while (end < cleanCore.length) {
-                    val c = cleanCore[end]
-                    val openForC = closeToOpen[c]
-                    when {
-                        openForC != null && (depths[openForC] ?: 0) > 0 -> {
-                            depths[openForC] = depths.getValue(openForC) - 1
-                            end++
-                        }
-                        c in openToClose && (depths[c] ?: 0) > 0 -> {
-                            depths[c] = depths.getValue(c) + 1
-                            end++
-                        }
-                        else -> return@run
-                    }
-                }
-            }
-            run {
-                val openToClose = mapOf(
-                    '(' to ')', '[' to ']', '{' to '}',
-                    '«' to '»', '“' to '”', '‘' to '’',
-                    '‹' to '›', '「' to '」', '〈' to '〉', '【' to '】'
-                )
-                val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
-                val depths = HashMap<Char, Int>()
-
-                for (idx in start until end) {
-                    val c = cleanCore[idx]
-                    if (c in openToClose) {
-                        depths[c] = (depths[c] ?: 0) + 1
-                    } else if (c in closeToOpen) {
-                        val o = closeToOpen.getValue(c)
-                        depths[o] = (depths[o] ?: 0) - 1
-                    }
-                }
-
-                while (start > 0) {
-                    val c = cleanCore[start - 1]
-                    when {
-                        c in openToClose && (depths[c] ?: 0) < 0 -> {
-                            depths[c] = depths.getValue(c) + 1
-                            start--
-                        }
-                        c in closeToOpen && (depths[closeToOpen.getValue(c)] ?: 0) < 0 -> {
-                            val o = closeToOpen.getValue(c)
-                            depths[o] = depths.getValue(o) - 1
-                            start--
-                        }
-                        else -> return@run
-                    }
-                }
-            }
-            
-            // New logic to prevent splitting identical quote pairs (like "China")
-            run {
-                val identicalQuotes = listOf('"', '\'', '”', '“', '„')
+                // 1. الاقتباسات المستقيمة المتطابقة (فحص الجمل المفردة ومتعددة الأسطر)
+                val identicalQuotes = listOf('"', '\'')
                 for (q in identicalQuotes) {
-                    val totalCount = cleanCore.count { it == q }
-                    if (totalCount > 0 && totalCount % 2 == 0) {
-                        var middleCount = 0
-                        for (idx in start until end) {
-                            if (cleanCore[idx] == q) middleCount++
-                        }
-                        if (middleCount % 2 != 0) {
-                            // Split pair detected! Pull the quote back inside.
-                            if (start > 0 && cleanCore[start - 1] == q) {
-                                start--
-                            } else if (end < cleanCore.length && cleanCore[end] == q) {
-                                end++
-                            }
-                        }
+                    val totalInText = text.count { it == q }
+                    val totalInLine = cleanCore.count { it == q }
+                    var middleCount = 0
+                    for (idx in start until end) {
+                        if (cleanCore[idx] == q) middleCount++
+                    }
+
+                    if (middleCount % 2 != 0) {
+                        // الاقتباس انفصل عن الكلمة المجاورة له في نفس السطر، نسحبه للداخل
+                        if (start > 0 && cleanCore[start - 1] == q) start--
+                        else if (end < cleanCore.length && cleanCore[end] == q) end++
+                    } else if (totalInLine % 2 != 0 && totalInText > 0 && totalInText % 2 == 0) {
+                        // الاقتباس هو جزء من حوار متعدد الأسطر، نسحب جميع أطرافه للداخل
+                        while (start > 0 && cleanCore[start - 1] == q) start--
+                        while (end < cleanCore.length && cleanCore[end] == q) end++
+                    }
+                }
+
+                // 2. الأقواس الموجهة والاقتباسات الذكية
+                val pairs = listOf(
+                    '(' to ')', '[' to ']', '{' to '}',
+                    '«' to '»', '“' to '”', '‘' to '’',
+                    '‹' to '›', '「' to '」', '〈' to '〉', '【' to '】'
+                )
+                for ((open, close) in pairs) {
+                    val totalOpenInText = text.count { it == open }
+                    val totalCloseInText = text.count { it == close }
+                    val isBalancedGlobally = totalOpenInText == totalCloseInText && totalOpenInText > 0
+
+                    val openInLine = cleanCore.count { it == open }
+                    val closeInLine = cleanCore.count { it == close }
+
+                    var openInMiddle = 0
+                    var closeInMiddle = 0
+                    for (idx in start until end) {
+                        if (cleanCore[idx] == open) openInMiddle++
+                        if (cleanCore[idx] == close) closeInMiddle++
+                    }
+
+                    while (openInMiddle > closeInMiddle && end < cleanCore.length && cleanCore[end] == close) {
+                        end++
+                        closeInMiddle++
+                    }
+                    while (closeInMiddle > openInMiddle && start > 0 && cleanCore[start - 1] == open) {
+                        start--
+                        openInMiddle++
+                    }
+
+                    if (openInLine != closeInLine && isBalancedGlobally) {
+                        while (start > 0 && (cleanCore[start - 1] == open || cleanCore[start - 1] == close)) start--
+                        while (end < cleanCore.length && (cleanCore[end] == open || cleanCore[end] == close)) end++
                     }
                 }
             }
