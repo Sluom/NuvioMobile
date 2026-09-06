@@ -107,7 +107,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
-        if (firstChar == '"' || firstChar == '”' || firstChar == '“' || firstChar == '«' || firstChar == '\'' ||
+        if (firstChar == '"' || firstChar == '\'' || firstChar == '«' || firstChar == '”' || firstChar == '“' || 
             firstChar == '„' || firstChar == '‚' || firstChar == '＂' || firstChar == '′' || firstChar == '″' || 
             firstChar == '‘' || firstChar == '’') {
             return false
@@ -120,6 +120,12 @@ internal object AndroidPlayerSubtitleRtlFix {
             
         if (firstChar == '♪' || firstChar == '♫' || firstChar == '~') {
             return false
+        }
+        
+        // حماية الثلاث نقاط من التفكيك الخاطئ
+        if (firstChar == '…') return false
+        if (firstChar == '.') {
+            if (text.length >= 2 && text[1] == '.') return false
         }
         
         return isBoundaryPunctuation(firstChar)
@@ -341,10 +347,11 @@ internal object AndroidPlayerSubtitleRtlFix {
                 }
             }
             
+            // هنا الإرجاع الأصلي 100% لمكان طباعة علامة الاستفهام داخل الغلاف
             if (start >= end) {
-                builder.append('\u200F').append('\u202B').append(cleanCore).append('\u202C')
+                builder.append('\u200F').append('\u202B').append(cleanCore)
                 if (hasQuestionMark) builder.append('؟')
-                builder.append('\u200F')
+                builder.append('\u202C').append('\u200F')
                 if (hasCr) builder.append('\r')
                 continue
             }
@@ -367,13 +374,12 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
             }
             
-            builder.append('\u202C')
-            
+            // هنا الإرجاع الأصلي 100% لمكان طباعة علامة الاستفهام داخل الغلاف
             if (hasQuestionMark) {
                 builder.append('؟')
             }
             
-            builder.append('\u200F')
+            builder.append('\u202C').append('\u200F')
             
             if (hasCr) builder.append('\r')
         }
@@ -381,6 +387,7 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
+        // النجمة (*) ما زالت هنا لنجاحها
         return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
                c == '!' || c == '؟' || c == '?' ||
                c == '-' || c == '—' ||
