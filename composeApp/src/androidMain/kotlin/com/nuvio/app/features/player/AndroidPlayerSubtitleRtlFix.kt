@@ -111,6 +111,11 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
+        // استثناء علامات الاقتباس من اعتبارها مؤشراً لترجمة مبعثرة
+        if (firstChar == '"' || firstChar == '”' || firstChar == '“' || firstChar == '«') {
+            return false
+        }
+        
         return isBoundaryPunctuation(firstChar)
     }
 
@@ -192,10 +197,36 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             var start = 0
-            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
+            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) {
+                val c = cleanCore[start]
+                // لا تنزع الفاصلة أو النقطة إذا جاءت في البداية عرضاً
+                if (c == '.' || c == '،' || c == ',' || c == '؛' || c == ':') break
+                start++
+            }
             
             var end = cleanCore.length
-            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
+            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) {
+                val c = cleanCore[end - 1]
+                // الحماية الأساسية: منع نزع علامات الترقيم النحوية من نهاية السطر وإبقائها داخل الكتلة العربية
+                if (c == '.' || c == '،' || c == ',' || c == '؛' || c == ':') break
+                end--
+            }
+
+            // إضافة خوارزمية ذكية لاسترداد علامات الاقتباس المستقيمة المزدوجة (") إن وُجدت
+            var straightQuotesCount = 0
+            for (idx in start until end) {
+                if (cleanCore[idx] == '"') straightQuotesCount++
+            }
+
+            // إذا كان العدد فردياً داخل النص، فهذا يعني أن العلامة المكملة تُركت في الخارج، يجب سحبها للداخل
+            while (end < cleanCore.length && cleanCore[end] == '"' && straightQuotesCount % 2 != 0) {
+                straightQuotesCount++
+                end++
+            }
+            while (start > 0 && cleanCore[start - 1] == '"' && straightQuotesCount % 2 != 0) {
+                straightQuotesCount++
+                start--
+            }
 
             // Prevent a matched parenthesis pair from being split between
             // the trimmed boundary punctuation and the embedded middle
