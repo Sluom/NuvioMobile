@@ -133,17 +133,37 @@ internal object AndroidPlayerSubtitleRtlFix {
     
     private fun stabilizeRtlText(text: CharSequence): CharSequence {
         val sb = StringBuilder(text.length + 16)
+        var inHtmlTag = false
+        
         for (i in 0 until text.length) {
             val c = text[i]
+            
+            // حماية وسوم البرمجة (مثل <i> أو <font>) من التخريب
+            if (c == '<') inHtmlTag = true
+            
             sb.append(c)
             
-            if (c == '"' || c == '«' || c == '»') {
+            if (c == '>') {
+                inHtmlTag = false
+                continue
+            }
+            
+            // إذا كنا داخل وسم برمجي، نتجاوز التثبيت تماماً
+            if (inHtmlTag) continue
+            
+            // 1. الأقواس بجميع أنواعها، الاقتباسات، النوتات الموسيقية، وعلامة المد (تثبيت فوري)
+            if (c == '"' || c == '«' || c == '»' || c == '”' || c == '“' || c == '‘' || c == '’' ||
+                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+                c == '「' || c == '」' || c == '‹' || c == '›' ||
+                c == '♪' || c == '♫' || c == '~' || c == '٪') {
                 sb.append('\u200F')
             } 
-            else if (c == '؟' || c == '،' || c == '؛') {
+            // 2. العلامات العربية الصريحة وعلامات التعجب (تثبيت فوري)
+            else if (c == '؟' || c == '،' || c == '؛' || c == '!' || c == '…') {
                 sb.append('\u200F')
             }
-            else if (c == '.' || c == ',' || c == '-' || c == '?') {
+            // 3. العلامات المشتركة: يتم فحصها بذكاء لحماية الأرقام، النسب المئوية، والكلمات الأجنبية
+            else if (c == '.' || c == ',' || c == '-' || c == '?' || c == ':' || c == '—' || c == '–' || c == '%') {
                 val prev = if (i > 0) text[i - 1] else ' '
                 val next = if (i < text.length - 1) text[i + 1] else ' '
                 
@@ -211,6 +231,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 end--
             }
 
+            // تم حصر العداد على العلامة المستقيمة فقط لمنع التداخل مع الخوارزمية الأساسية
             var symmetricQuotesCount = 0
             for (idx in start until end) {
                 if (cleanCore[idx] == '"') symmetricQuotesCount++
@@ -340,7 +361,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
                c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
                c == '„' || c == '‚' || c == '＂' || c == '′' || c == '″' ||
-               c == '♪' || c == '♫' ||
+               c == '♪' || c == '♫' || c == '~' ||
                c == '؛' ||
                c == '–' || c == '‐' || c == '‒' ||
                c == '‹' || c == '›' || c == '「' || c == '」' || c == '〈' || c == '〉' || c == '【' || c == '】' ||
