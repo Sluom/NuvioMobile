@@ -107,13 +107,13 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
-        if (firstChar == '"' || firstChar == '”' || firstChar == '“' || firstChar == '«' || firstChar == '\'' ||
+        if (firstChar == '”' || firstChar == '“' || firstChar == '«' || firstChar == '\'' ||
             firstChar == '„' || firstChar == '‚' || firstChar == '＂' || firstChar == '′' || firstChar == '″' || 
             firstChar == '‘' || firstChar == '’') {
             return false
         }
         
-        if (firstChar == '(' || firstChar == '[' || firstChar == '{' || firstChar == '「' || firstChar == '‹' || 
+        if (firstChar == '[' || firstChar == '{' || firstChar == '「' || firstChar == '‹' || 
             firstChar == '〈' || firstChar == '【') {
             return false
         }
@@ -121,8 +121,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (firstChar == '♪' || firstChar == '♫' || firstChar == '~') {
             return false
         }
-        
-        // تم إلغاء استثناء النقاط من هنا: أي جملة تبدأ بنقطة أو نقاط متتالية ستعتبر مبعثرة فوراً
         
         return isBoundaryPunctuation(firstChar)
     }
@@ -144,13 +142,13 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
-        if (lastChar == '"' || lastChar == '\'' || lastChar == '»' || lastChar == '”' || lastChar == '“' || 
+        if (lastChar == '\'' || lastChar == '»' || lastChar == '”' || lastChar == '“' || 
             lastChar == '„' || lastChar == '‚' || lastChar == '＂' || lastChar == '′' || lastChar == '″' || 
             lastChar == '‘' || lastChar == '’') {
             return false
         }
             
-        if (lastChar == ')' || lastChar == ']' || lastChar == '}' || lastChar == '」' || lastChar == '›' || 
+        if (lastChar == ']' || lastChar == '}' || lastChar == '」' || lastChar == '›' || 
             lastChar == '〉' || lastChar == '】') {
             return false
         }
@@ -180,8 +178,8 @@ internal object AndroidPlayerSubtitleRtlFix {
             
             if (inHtmlTag) continue
             
-            if (c == '"' || c == '«' || c == '»' || c == '”' || c == '“' || c == '‘' || c == '’' ||
-                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+            if (c == '«' || c == '»' || c == '”' || c == '“' || c == '‘' || c == '’' ||
+                c == '[' || c == ']' || c == '{' || c == '}' ||
                 c == '「' || c == '」' || c == '‹' || c == '›' ||
                 c == '♪' || c == '♫' || c == '~' || c == '٪') {
                 sb.append('\u200F')
@@ -197,12 +195,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 val isNextDigitOrLatin = next.isDigit() || next in 'a'..'z' || next in 'A'..'Z'
                 
                 if (!isPrevDigitOrLatin && !isNextDigitOrLatin) {
-                    // حماية جمالية: منع التثبيت الداخلي بين النقاط المتتالية لتبقى متراصة
-                    if (c == '.' && next == '.') {
-                        // لا تفعل شيئاً
-                    } else {
-                        sb.append('\u200F')
-                    }
+                    sb.append('\u200F')
                 }
             }
         }
@@ -349,7 +342,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             if (start >= end) {
-                // دمج الغلاف ليشمل كامل السطر
                 builder.append('\u200F').append('\u202B').append(cleanCore)
                 if (hasQuestionMark) builder.append('؟')
                 builder.append('\u202C').append('\u200F')
@@ -363,7 +355,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             val middleText = cleanCore.subSequence(start, end)
             val stabilizedMiddle = stabilizeRtlText(middleText)
             
-            // توسيع منطقة الأمان: التغليف يبدأ من هنا ليحتوي الشارحة والأقواس المقلوبة
             builder.append('\u200F').append('\u202B')
             
             for (j in trailingPunc.indices.reversed()) {
@@ -380,7 +371,6 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append('؟')
             }
             
-            // التغليف ينتهي هنا لضمان معاملة السطر ككتلة يمينية واحدة
             builder.append('\u202C').append('\u200F')
             
             if (hasCr) builder.append('\r')
