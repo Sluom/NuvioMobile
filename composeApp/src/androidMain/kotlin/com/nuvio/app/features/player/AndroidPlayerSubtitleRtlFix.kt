@@ -137,17 +137,20 @@ internal object AndroidPlayerSubtitleRtlFix {
             val c = text[i]
             sb.append(c)
             
-            if (c == '"' || c == '”' || c == '“' || c == '«' || c == '»') {
+            if (c == '"' || c == '«' || c == '»') {
                 sb.append('\u200F')
             } 
-            else if (c == '.' || c == '،' || c == ',' || c == '؛' || c == '-' || c == '؟' || c == '?') {
+            else if (c == '؟' || c == '،' || c == '؛') {
+                sb.append('\u200F')
+            }
+            else if (c == '.' || c == ',' || c == '-' || c == '?') {
                 val prev = if (i > 0) text[i - 1] else ' '
                 val next = if (i < text.length - 1) text[i + 1] else ' '
                 
                 val isPrevDigitOrLatin = prev.isDigit() || prev in 'a'..'z' || prev in 'A'..'Z'
                 val isNextDigitOrLatin = next.isDigit() || next in 'a'..'z' || next in 'A'..'Z'
                 
-                if (!(isPrevDigitOrLatin && isNextDigitOrLatin)) {
+                if (!isPrevDigitOrLatin && !isNextDigitOrLatin) {
                     sb.append('\u200F')
                 }
             }
@@ -210,15 +213,14 @@ internal object AndroidPlayerSubtitleRtlFix {
 
             var symmetricQuotesCount = 0
             for (idx in start until end) {
-                val c = cleanCore[idx]
-                if (c == '"' || c == '”' || c == '“') symmetricQuotesCount++
+                if (cleanCore[idx] == '"') symmetricQuotesCount++
             }
 
-            while (end < cleanCore.length && (cleanCore[end] == '"' || cleanCore[end] == '”' || cleanCore[end] == '“') && symmetricQuotesCount % 2 != 0) {
+            while (end < cleanCore.length && cleanCore[end] == '"' && symmetricQuotesCount % 2 != 0) {
                 symmetricQuotesCount++
                 end++
             }
-            while (start > 0 && (cleanCore[start - 1] == '"' || cleanCore[start - 1] == '”' || cleanCore[start - 1] == '“') && symmetricQuotesCount % 2 != 0) {
+            while (start > 0 && cleanCore[start - 1] == '"' && symmetricQuotesCount % 2 != 0) {
                 symmetricQuotesCount++
                 start--
             }
