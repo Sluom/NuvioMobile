@@ -111,11 +111,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
-        // استثناء علامات الاقتباس من اعتبارها مؤشراً لترجمة مبعثرة
-        if (firstChar == '"' || firstChar == '”' || firstChar == '“' || firstChar == '«') {
-            return false
-        }
-        
         return isBoundaryPunctuation(firstChar)
     }
 
@@ -197,36 +192,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             
             var start = 0
-            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) {
-                val c = cleanCore[start]
-                // لا تنزع الفاصلة أو النقطة إذا جاءت في البداية عرضاً
-                if (c == '.' || c == '،' || c == ',' || c == '؛' || c == ':') break
-                start++
-            }
+            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
             
             var end = cleanCore.length
-            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) {
-                val c = cleanCore[end - 1]
-                // الحماية الأساسية: منع نزع علامات الترقيم النحوية من نهاية السطر وإبقائها داخل الكتلة العربية
-                if (c == '.' || c == '،' || c == ',' || c == '؛' || c == ':') break
-                end--
-            }
-
-            // إضافة خوارزمية ذكية لاسترداد علامات الاقتباس المستقيمة المزدوجة (") إن وُجدت
-            var straightQuotesCount = 0
-            for (idx in start until end) {
-                if (cleanCore[idx] == '"') straightQuotesCount++
-            }
-
-            // إذا كان العدد فردياً داخل النص، فهذا يعني أن العلامة المكملة تُركت في الخارج، يجب سحبها للداخل
-            while (end < cleanCore.length && cleanCore[end] == '"' && straightQuotesCount % 2 != 0) {
-                straightQuotesCount++
-                end++
-            }
-            while (start > 0 && cleanCore[start - 1] == '"' && straightQuotesCount % 2 != 0) {
-                straightQuotesCount++
-                start--
-            }
+            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
 
             // Prevent a matched parenthesis pair from being split between
             // the trimmed boundary punctuation and the embedded middle
@@ -341,7 +310,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
             
-            builder.append('\u202B').append(middleText).append('\u202C')
+            builder.append('\u202B').append(pinInteriorNeutralMarks(middleText)).append('\u202C')
             
             for (j in leadingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
@@ -354,6 +323,38 @@ internal object AndroidPlayerSubtitleRtlFix {
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
+    }
+
+    // Interior (mid-line/mid-sentence) neutral marks that have no
+    // explicit RLE/PDF embedding of their own — unlike the leading/
+    // trailing punctuation, which is fully extracted, mirrored, and
+    // wrapped by the existing logic. Pinning each one individually with
+    // invisible RLM (right-to-left mark, U+200F) on both sides anchors
+    // its resolved direction to RTL without altering its glyph (none of
+    // these are Bidi-mirrored characters) or its position in the text.
+    // Purely additive: it only touches interior text that was already
+    // passed through untouched before, and RLM is invisible, so any
+    // occurrence that already rendered correctly is unaffected.
+    private val INTERIOR_PIN_CHARS = setOf('"', '„', '‚', '＂', '′', '″', '،')
+
+    private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
+        var found = false
+        for (i in text.indices) {
+            if (text[i] in INTERIOR_PIN_CHARS) {
+                found = true
+                break
+            }
+        }
+        if (!found) return text
+        val sb = StringBuilder(text.length + 8)
+        for (ch in text) {
+            if (ch in INTERIOR_PIN_CHARS) {
+                sb.append('\u200F').append(ch).append('\u200F')
+            } else {
+                sb.append(ch)
+            }
+        }
+        return sb
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
@@ -424,7 +425,8 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
             
-            builder.append('\u200F').append('\u202B').append(core).append('\u202C').append('\u200F')
+            val pinnedCore = pinInteriorNeutralMarks(core)
+            builder.append('\u200F').append('\u202B').append(pinnedCore).append('\u202C').append('\u200F')
             
             if (hasCr) builder.append('\r')
         }
