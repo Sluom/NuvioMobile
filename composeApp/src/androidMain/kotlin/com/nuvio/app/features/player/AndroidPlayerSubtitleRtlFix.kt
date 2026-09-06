@@ -178,16 +178,17 @@ internal object AndroidPlayerSubtitleRtlFix {
             
             if (inHtmlTag) continue
             
+            // تم حذف علامات الاستفهام (؟ و ?) من هنا
             if (c == '«' || c == '»' || c == '”' || c == '“' || c == '‘' || c == '’' ||
                 c == '[' || c == ']' || c == '{' || c == '}' ||
                 c == '「' || c == '」' || c == '‹' || c == '›' ||
                 c == '♪' || c == '♫' || c == '~' || c == '٪') {
                 sb.append('\u200F')
             } 
-            else if (c == '؟' || c == '،' || c == '؛' || c == '!' || c == '…') {
+            else if (c == '،' || c == '؛' || c == '!' || c == '…') {
                 sb.append('\u200F')
             }
-            else if (c == '.' || c == ',' || c == '-' || c == '?' || c == ':' || c == '—' || c == '–' || c == '%') {
+            else if (c == '.' || c == ',' || c == '-' || c == ':' || c == '—' || c == '–' || c == '%') {
                 val prev = if (i > 0) text[i - 1] else ' '
                 val next = if (i < text.length - 1) text[i + 1] else ' '
                 
@@ -247,11 +248,23 @@ internal object AndroidPlayerSubtitleRtlFix {
             
             var start = 0
             while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) {
+                // استثناء: لا تقم بتقشير علامة الاقتباس المستقيمة المفردة من البداية
+                if (cleanCore[start] == '"') {
+                    var count = 0
+                    for (c in cleanCore) if (c == '"') count++
+                    if (count % 2 != 0) break // توقف عن التقشير إذا كانت فردية
+                }
                 start++
             }
             
             var end = cleanCore.length
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) {
+                 // استثناء: لا تقم بتقشير علامة الاقتباس المستقيمة المفردة من النهاية
+                if (cleanCore[end - 1] == '"') {
+                    var count = 0
+                    for (c in cleanCore) if (c == '"') count++
+                    if (count % 2 != 0) break // توقف عن التقشير إذا كانت فردية
+                }
                 end--
             }
 
@@ -379,6 +392,7 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
+        // تم إضافة النجمة (*) هنا
         return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
                c == '!' || c == '؟' || c == '?' ||
                c == '-' || c == '—' ||
@@ -386,7 +400,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
                c == '„' || c == '‚' || c == '＂' || c == '′' || c == '″' ||
                c == '♪' || c == '♫' || c == '~' ||
-               c == '؛' ||
+               c == '؛' || c == '*' ||
                c == '–' || c == '‐' || c == '‒' ||
                c == '‹' || c == '›' || c == '「' || c == '」' || c == '〈' || c == '〉' || c == '【' || c == '】' ||
                c.isWhitespace()
