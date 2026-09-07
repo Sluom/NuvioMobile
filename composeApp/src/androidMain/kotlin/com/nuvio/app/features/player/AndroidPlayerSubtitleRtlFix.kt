@@ -11,29 +11,33 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    // القاموس الموحد لكل الأقواس في العالم
-    private val BRACKET_PAIRS = mapOf(
+    private val OPEN_TO_CLOSE = mapOf(
         '(' to ')', '[' to ']', '{' to '}', '<' to '>',
-        '«' to '»', '“' to '”', '‘' to '’',
-        '„' to '“', '‚' to '‘', '‹' to '›',
-        '「' to '」', '『' to '』', '【' to '】', '〔' to '〕',
-        '〖' to '〗', '《' to '》', '〈' to '〉', '〘' to '〙',
-        '〚' to '〛', '⟦' to '⟧', '⟨' to '⟩', '⟪' to '⟫',
-        '⟬' to '⟭', '⟮' to '⟯'
+        '«' to '»', '»' to '«', '“' to '”', '”' to '“',
+        '‘' to '’', '’' to '‘', '„' to '“', '‚' to '‘',
+        '‹' to '›', '›' to '‹', '「' to '」', '『' to '』',
+        '【' to '】', '〔' to '〕', '〖' to '〗', '《' to '》',
+        '〈' to '〉', '〘' to '〙', '〚' to '〛', '⟦' to '⟧',
+        '⟨' to '⟩', '⟪' to '⟫', '⟬' to '⟭', '⟮' to '⟯',
+        '⦃' to '⦄', '⦅' to '⦆', '⸢' to '⸣', '⸤' to '⸥',
+        '〝' to '〞', '〞' to '〝', '〟' to '〝'
     )
 
-    private val OPEN_TO_CLOSE = BRACKET_PAIRS
-    private val CLOSE_TO_OPEN = BRACKET_PAIRS.entries.associate { (k, v) -> v to k }
+    private val CLOSE_TO_OPEN = OPEN_TO_CLOSE.entries.associate { (k, v) -> v to k }
 
-    // دالة موحدة تجلب الشريك (إذا لم يكن قوساً، فشريكه هو نفسه مثل النقاط وعلامات الاستفهام)
+    private val SYMMETRICAL_SYMBOLS = setOf(
+        '"', '\'', '＂', '＇', '′', '″', '‵', '‶',
+        '♪', '♫', '♬', '♩', '*', '_', '|', '~', '^', '`',
+        '#', '=', '+', '%', '•', '°', '؟', '?', '!', '.',
+        '،', ',', ':', ';', '؛', '-', '—', '–', '‐', '‒', '¬'
+    )
+
     private fun getMatchingSymbol(c: Char): Char {
         return OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
     }
 
-    // تعريف شامل: أي شيء ليس حرفاً أو رقماً يعتبر رمزاً/علامة
     private fun isBoundaryPunctuation(c: Char): Boolean {
-        if (c.isLetterOrDigit()) return false
-        return true
+        return c in OPEN_TO_CLOSE || c in CLOSE_TO_OPEN || c in SYMMETRICAL_SYMBOLS
     }
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
@@ -112,7 +116,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    // الفلتر الموحد: يتحقق من المطابقة والالتصاق لبداية السطر
     private fun hasMessyLeadingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
         if (line.isEmpty()) return false
         val firstChar = line.first()
@@ -136,7 +139,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return !foundAttachedMatch
     }
 
-    // الفلتر الموحد: يتحقق من المطابقة والالتصاق لنهاية السطر
     private fun hasMessyTrailingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
         if (line.isEmpty()) return false
         val lastChar = line.last()
@@ -160,7 +162,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return !foundAttachedMatch
     }
 
-    // المعالجة الموحدة لقلب الترجمة العشوائية وحماية الكتل الملاصقة
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
@@ -188,21 +189,19 @@ internal object AndroidPlayerSubtitleRtlFix {
                 val c = cleanCore[start]
                 if (!isBoundaryPunctuation(c)) break
 
-                if (!c.isWhitespace()) {
-                    val m = getMatchingSymbol(c)
-                    var isAttachedPair = false
-                    for (j in start + 1 until cleanCore.length) {
-                        if (cleanCore[j] == m) {
-                            val cNotFollowedBySpace = start + 1 < cleanCore.length && !cleanCore[start + 1].isWhitespace()
-                            val mNotPrecededBySpace = j > 0 && !cleanCore[j - 1].isWhitespace()
-                            if (cNotFollowedBySpace && mNotPrecededBySpace) {
-                                isAttachedPair = true
-                                break
-                            }
+                val m = getMatchingSymbol(c)
+                var isAttachedPair = false
+                for (j in start + 1 until cleanCore.length) {
+                    if (cleanCore[j] == m) {
+                        val cNotFollowedBySpace = start + 1 < cleanCore.length && !cleanCore[start + 1].isWhitespace()
+                        val mNotPrecededBySpace = j > 0 && !cleanCore[j - 1].isWhitespace()
+                        if (cNotFollowedBySpace && mNotPrecededBySpace) {
+                            isAttachedPair = true
+                            break
                         }
                     }
-                    if (isAttachedPair) break // وجدنا كتلة محمية، توقف عن السحب!
                 }
+                if (isAttachedPair) break
                 start++
             }
 
@@ -211,21 +210,19 @@ internal object AndroidPlayerSubtitleRtlFix {
                 val c = cleanCore[end - 1]
                 if (!isBoundaryPunctuation(c)) break
 
-                if (!c.isWhitespace()) {
-                    val m = getMatchingSymbol(c)
-                    var isAttachedPair = false
-                    for (j in 0 until end - 1) {
-                        if (cleanCore[j] == m) {
-                            val mNotFollowedBySpace = j + 1 < cleanCore.length && !cleanCore[j + 1].isWhitespace()
-                            val cNotPrecededBySpace = end - 2 >= 0 && !cleanCore[end - 2].isWhitespace()
-                            if (mNotFollowedBySpace && cNotPrecededBySpace) {
-                                isAttachedPair = true
-                                break
-                            }
+                val m = getMatchingSymbol(c)
+                var isAttachedPair = false
+                for (j in 0 until end - 1) {
+                    if (cleanCore[j] == m) {
+                        val mNotFollowedBySpace = j + 1 < cleanCore.length && !cleanCore[j + 1].isWhitespace()
+                        val cNotPrecededBySpace = end - 2 >= 0 && !cleanCore[end - 2].isWhitespace()
+                        if (mNotFollowedBySpace && cNotPrecededBySpace) {
+                            isAttachedPair = true
+                            break
                         }
                     }
-                    if (isAttachedPair) break // وجدنا كتلة محمية، توقف عن السحب!
                 }
+                if (isAttachedPair) break
                 end--
             }
 
@@ -239,12 +236,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
             val middleText = cleanCore.subSequence(start, end)
 
-            // قلب العلامات المنفردة العشوائية
             for (j in trailingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
 
-            // تجميد المنتصف والكتل المحمية بمسامير التوجيه
             builder.append('\u202B').append(pinInteriorNeutralMarks(middleText)).append('\u202C')
 
             for (j in leadingPunc.indices.reversed()) {
@@ -256,12 +251,11 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    // تثبيت أي علامة متبقية داخل الجملة (الكتل المحمية) لعدم تضررها
     private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
         var found = false
         for (i in text.indices) {
             val ch = text[i]
-            if (isBoundaryPunctuation(ch) && !ch.isWhitespace()) {
+            if (isBoundaryPunctuation(ch)) {
                 found = true
                 break
             }
@@ -271,7 +265,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         val sb = StringBuilder(text.length + 16)
         for (i in text.indices) {
             val ch = text[i]
-            if (isBoundaryPunctuation(ch) && !ch.isWhitespace()) {
+            if (isBoundaryPunctuation(ch)) {
                 sb.append('\u200F').append(ch).append('\u200F')
             } else {
                 sb.append(ch)
