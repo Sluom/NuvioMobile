@@ -47,11 +47,11 @@ internal object AndroidPlayerSubtitleRtlFix {
                c in SYMMETRICAL_SYMBOLS || c in TERMINAL_PUNCTUATION || c in DASHES
     }
 
-    private fun isUnbalancedInFullText(c: Char, fullText: CharSequence): Boolean {
+    private fun isUnbalancedInLine(c: Char, line: CharSequence): Boolean {
         if (c in SYMMETRICAL_SYMBOLS) {
             var count = 0
-            for (i in fullText.indices) {
-                if (fullText[i] == c) count++
+            for (i in line.indices) {
+                if (line[i] == c) count++
             }
             return count % 2 != 0
         }
@@ -61,9 +61,9 @@ internal object AndroidPlayerSubtitleRtlFix {
             val close = BASE_BRACKETS[open] ?: return false
             var openCount = 0
             var closeCount = 0
-            for (i in fullText.indices) {
-                if (fullText[i] == open) openCount++
-                else if (fullText[i] == close) closeCount++
+            for (i in line.indices) {
+                if (line[i] == open) openCount++
+                else if (line[i] == close) closeCount++
             }
             return openCount != closeCount
         }
@@ -159,14 +159,14 @@ internal object AndroidPlayerSubtitleRtlFix {
         for (line in lines) {
             val trimmed = line.trim()
             if (trimmed.isEmpty()) continue
-            if (hasMessyLeadingBoundary(trimmed, text) || hasMessyTrailingBoundary(trimmed, text)) {
+            if (hasMessyLeadingBoundary(trimmed) || hasMessyTrailingBoundary(trimmed)) {
                 return true
             }
         }
         return false
     }
 
-    private fun hasMessyLeadingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
+    private fun hasMessyLeadingBoundary(line: CharSequence): Boolean {
         var start = 0
         var isMessy = false
         
@@ -184,7 +184,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 isMessy = true
             } else if (BASE_BRACKETS.containsValue(c)) { 
                 isMessy = true 
-            } else if (isUnbalancedInFullText(c, fullText)) {
+            } else if (isUnbalancedInLine(c, line)) {
                 isMessy = true
             }
             start++
@@ -192,7 +192,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         return isMessy
     }
 
-    private fun hasMessyTrailingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
+    private fun hasMessyTrailingBoundary(line: CharSequence): Boolean {
         var end = line.length
         var depth = 0
         var isMessy = false
@@ -210,7 +210,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 isMessy = true 
             } else if (BASE_BRACKETS.containsKey(c)) { 
                 isMessy = true 
-            } else if (isUnbalancedInFullText(c, fullText)) {
+            } else if (isUnbalancedInLine(c, line)) {
                 isMessy = true
             }
             end--
@@ -258,38 +258,70 @@ internal object AndroidPlayerSubtitleRtlFix {
                 } else break
             }
 
-            var extractedDash = false
+            var extractedDashChar: Char? = null
             val misplacedStart = java.lang.StringBuilder()
             for (j in 0 until start) {
                 val c = cleanCore[j]
-                if (c in DASHES) extractedDash = true
-                else if (!c.isWhitespace()) misplacedStart.append(c)
+                if (c in DASHES && extractedDashChar == null) {
+                    extractedDashChar = c
+                } else if (!c.isWhitespace()) {
+                    misplacedStart.append(c)
+                }
             }
 
             val misplacedEnd = java.lang.StringBuilder()
             for (j in end until cleanCore.length) {
                 val c = cleanCore[j]
-                if (c in DASHES) extractedDash = true
-                else if (!c.isWhitespace()) misplacedEnd.append(c)
+                if (c in DASHES && extractedDashChar == null) {
+                    extractedDashChar = c
+                } else if (!c.isWhitespace()) {
+                    misplacedEnd.append(c)
+                }
+            }
+
+            val terminals = java.lang.StringBuilder()
+            val cleanEnd = java.lang.StringBuilder()
+            for (j in misplacedEnd.indices) {
+                val c = misplacedEnd[j]
+                if (c in TERMINAL_PUNCTUATION) {
+                    terminals.append(c)
+                } else {
+                    cleanEnd.append(c)
+                }
+            }
+
+            val cleanStart = java.lang.StringBuilder()
+            for (j in misplacedStart.indices) {
+                val c = misplacedStart[j]
+                if (c in TERMINAL_PUNCTUATION) {
+                    terminals.append(c)
+                } else {
+                    cleanStart.append(c)
+                }
             }
 
             val reversedEnd = java.lang.StringBuilder()
-            for (j in misplacedEnd.indices.reversed()) {
-                reversedEnd.append(mirrorArabicPunctuation(misplacedEnd[j]))
+            for (j in cleanEnd.indices.reversed()) {
+                reversedEnd.append(mirrorArabicPunctuation(cleanEnd[j]))
             }
 
             val reversedStart = java.lang.StringBuilder()
-            for (j in misplacedStart.indices.reversed()) {
-                reversedStart.append(mirrorArabicPunctuation(misplacedStart[j]))
+            for (j in cleanStart.indices.reversed()) {
+                reversedStart.append(mirrorArabicPunctuation(cleanStart[j]))
             }
 
             val middleText = cleanCore.subSequence(start, end)
 
             builder.append('\u202B')
-            if (extractedDash) builder.append("- ")
+            if (extractedDashChar != null) {
+                builder.append(extractedDashChar)
+            }
             builder.append(reversedEnd)
             builder.append(pinInteriorNeutralMarks(middleText))
             builder.append(reversedStart)
+            if (terminals.isNotEmpty()) {
+                builder.append(terminals)
+            }
             builder.append('\u202C')
 
             if (hasCr) builder.append('\r')
