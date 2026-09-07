@@ -294,6 +294,37 @@ internal object AndroidPlayerSubtitleRtlFix {
                     }
                 }
             }
+
+            // Prevent a matched straight-quote pair ("...") from being
+            // split between the trimmed boundary punctuation and the
+            // embedded middle text — the same problem the bracket/curly-
+            // quote balancing above solves for bidirectionally-mirrored
+            // pairs (e.g. "( )", "“ ”"). A straight '"' uses the identical
+            // glyph for both open and close, so it can't be tracked with
+            // an open→close map the way those pairs are; parity (odd/even
+            // count within the current span) is used instead. If
+            // [start, end) holds an unmatched '"', its true partner sits
+            // just outside the span — pull it in from whichever side
+            // holds it so the pair stays together as one unit inside
+            // middleText, instead of only the leading (or only the
+            // trailing) member being extracted alone and relocated to the
+            // opposite side of the RLE/PDF embedding. Lines with no '"'
+            // (the vast majority) or with an already-balanced pair are
+            // completely unaffected.
+            run {
+                var quoteCount = 0
+                for (idx in start until end) {
+                    if (cleanCore[idx] == '"') quoteCount++
+                }
+                while (start > 0 && quoteCount % 2 != 0 && cleanCore[start - 1] == '"') {
+                    quoteCount++
+                    start--
+                }
+                while (end < cleanCore.length && quoteCount % 2 != 0 && cleanCore[end] == '"') {
+                    quoteCount++
+                    end++
+                }
+            }
             
             if (start >= end) {
                 builder.append(cleanCore)
