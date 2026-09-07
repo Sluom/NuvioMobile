@@ -212,8 +212,10 @@ internal object AndroidPlayerSubtitleRtlFix {
             // the trimmed boundary punctuation and the embedded middle
             // text — the same issue fixed earlier for '(' ')', generalized
             // to every bidirectionally-mirrored pair: [] {} «» and the
-            // curly/smart quotes “” ‘’, plus (added) the angle/corner
-            // bracket pairs ‹› 「」 〈〉 【】, which behave identically —
+            // curly/smart single quotes ‘’ (curly double quotes “” are
+            // deliberately excluded — see isBoundaryPunctuation), plus
+            // (added) the angle/corner bracket pairs ‹› 「」 〈〉 【】,
+            // which behave identically —
             // always open/close pairs, never a standalone mark. (Straight
             // '"' and '!' don't need this — their glyph doesn't change
             // with direction, so a split there is invisible.) A split pair
@@ -227,7 +229,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             run {
                 val openToClose = mapOf(
                     '(' to ')', '[' to ']', '{' to '}',
-                    '«' to '»', '“' to '”', '‘' to '’',
+                    '«' to '»', '‘' to '’',
                     '‹' to '›', '「' to '」', '〈' to '〉', '【' to '】'
                 )
                 val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
@@ -262,7 +264,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             run {
                 val openToClose = mapOf(
                     '(' to ')', '[' to ']', '{' to '}',
-                    '«' to '»', '“' to '”', '‘' to '’',
+                    '«' to '»', '‘' to '’',
                     '‹' to '›', '「' to '」', '〈' to '〉', '【' to '】'
                 )
                 val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
@@ -402,7 +404,14 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
-        return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
+        // Note: '“' and '”' (curly double quotes) are intentionally NOT
+        // treated as boundary punctuation. Lines/words wrapped in this
+        // specific pair are left out of the messy-detection and
+        // leading/trailing extraction logic entirely — they always flow
+        // through wrapArabicLines untouched (still RLM-pinned via
+        // pinInteriorNeutralMarks), never through applyVisualSwapping's
+        // trim/mirror path.
+        return c == '"' || c == '\'' || c == '«' || c == '»' ||
                c == '!' || c == '؟' || c == '?' ||
                c == '-' || c == '—' ||
                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
@@ -435,11 +444,9 @@ internal object AndroidPlayerSubtitleRtlFix {
         '}' -> '{'
         '«' -> '»'
         '»' -> '«'
-        '“' -> '”'
-        '”' -> '“'
         '‘' -> '’'
         '’' -> '‘'
-        // Added — same pairing treatment as the existing «» / “” / ‘’.
+        // Added — same pairing treatment as the existing «» / ‘’.
         '‹' -> '›'
         '›' -> '‹'
         '「' -> '」'
