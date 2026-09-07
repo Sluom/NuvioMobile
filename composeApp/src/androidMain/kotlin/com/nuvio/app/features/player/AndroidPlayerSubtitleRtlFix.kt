@@ -11,6 +11,26 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
+    // قواميس شاملة لجميع الأقواس في العالم (عربي، لاتيني، آسيوي، رياضي)
+    private val OPEN_TO_CLOSE = mapOf(
+        '(' to ')', '[' to ']', '{' to '}', '<' to '>',
+        '«' to '»', '»' to '«', // شملنا المعكوسة لاحتمالية ورودها بشكل خاطئ
+        '“' to '”', '”' to '“',
+        '‘' to '’', '’' to '‘',
+        '‹' to '›', '›' to '‹',
+        '「' to '」', '『' to '』', '【' to '】', '〔' to '〕',
+        '〖' to '〗', '《' to '》', '〈' to '〉', '〘' to '〙',
+        '〚' to '〛', '⟦' to '⟧', '⟨' to '⟩', '⟪' to '⟫',
+        '⟬' to '⟭', '⟮' to '⟯'
+    )
+    
+    private val CLOSE_TO_OPEN = OPEN_TO_CLOSE.entries.associate { (k, v) -> v to k }
+
+    // الرموز والعلامات الأحادية المتناظرة (تستخدم كأقواس أحياناً)
+    private val SYMMETRICAL_MARKS = setOf(
+        '"', '\'', '„', '‚', '＂', '′', '″', '‵', '‶', '♪', '♫', '*', '_', '|', '~', '^', '`'
+    )
+
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
         val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
@@ -103,27 +123,51 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (text.isEmpty()) return false
         val firstChar = text.first()
         
-        // Dialogue-dash family: never treated as a messiness signal when it
-        // opens a line, since it legitimately marks a change of speaker.
-        // Added: en dash (–), hyphen (‐), figure dash (‒) — same role as
-        // the existing '-' and '—'.
-        if (firstChar == '-' || firstChar == '—' || firstChar == '–' || firstChar == '‐' || firstChar == '‒') {
+        // استثناء شُرَط الحوار لأنها سليمة إذا أتت في البداية
+        if (firstChar == '-' || firstChar == '—' || firstChar == '–' || firstChar == '‐' || firstChar == '‒' || firstChar == '¬') {
             return false
         }
         
-        return isBoundaryPunctuation(firstChar)
+        if (!isBoundaryPunctuation(firstChar)) {
+            return false
+        }
+
+        // التحقق من الأقواس المفتوحة (عالمياً) في بداية السطر
+        val closingMatch = OPEN_TO_CLOSE[firstChar]
+        if (closingMatch != null) {
+            // البحث عن الزوج المغلق في نفس السطر للحالات مثل (توني)
+            for (i in 1 until text.length) {
+                if (text[i] == closingMatch) return false
+            }
+            return true // قوس أحادي مقطوع في البداية، إذن السطر عشوائي
+        }
+
+        // التحقق من العلامات الأحادية المتناظرة (مثل " أو * أو _)
+        if (firstChar in SYMMETRICAL_MARKS) {
+            // البحث عن علامة أخرى مماثلة لإغلاق الكلمة/الجملة
+            for (i in 1 until text.length) {
+                if (text[i] == firstChar) return false
+            }
+            return true // علامة أحادية مقطوعة، إذن السطر عشوائي
+        }
+
+        // أي علامة ترقيم أخرى لا يفترض أن تكون في البداية تعتبر عشوائية
+        return true
     }
 
     private fun hasMessyTrailingBoundary(text: CharSequence): Boolean {
         if (text.isEmpty()) return false
         val lastChar = text.last()
         
-        // Added: Arabic semicolon (؛) — plays the same end-of-clause role
-        // as '.' / ':' / '،' here, both as the trailing char itself and as
-        // the "touching another boundary mark" check below.
-        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',' || lastChar == ':' || lastChar == '…' || lastChar == '؛') {
+        // علامات نهاية الجملة السليمة
+        val isEndingPunc = lastChar == '.' || lastChar == '؟' || lastChar == '?' || 
+                           lastChar == '!' || lastChar == '،' || lastChar == ',' || 
+                           lastChar == ':' || lastChar == '…' || lastChar == '؛'
+                           
+        if (isEndingPunc) {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
+                // إذا تكررت علامتا ترقيم فهذا يدل على عشوائية
                 if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?' || prevChar == ':' || prevChar == '؛') {
                     return true
                 }
@@ -131,7 +175,30 @@ internal object AndroidPlayerSubtitleRtlFix {
             return false
         }
         
-        return isBoundaryPunctuation(lastChar)
+        if (!isBoundaryPunctuation(lastChar)) {
+            return false
+        }
+
+        // التحقق من الأقواس المغلقة في نهاية السطر
+        val openingMatch = CLOSE_TO_OPEN[lastChar]
+        if (openingMatch != null) {
+            // البحث عن الزوج المفتوح في نفس السطر
+            for (i in 0 until text.length - 1) {
+                if (text[i] == openingMatch) return false
+            }
+            return true // قوس أحادي مقطوع في النهاية، إذن السطر عشوائي
+        }
+
+        // التحقق من العلامات الأحادية المتناظرة في النهاية
+        if (lastChar in SYMMETRICAL_MARKS) {
+            for (i in 0 until text.length - 1) {
+                if (text[i] == lastChar) return false
+            }
+            return true // علامة أحادية مقطوعة، إذن السطر عشوائي
+        }
+
+        // أي علامة ترقيم أخرى في النهاية (مثل شارحة الحوار) تعتبر عشوائية
+        return true
     }
 
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
@@ -161,20 +228,6 @@ internal object AndroidPlayerSubtitleRtlFix {
             for (k in 0 until rawCore.length) {
                 val ch = rawCore[k]
                 if (ch == '؟' || ch == '?') {
-                    // Normally '؟'/'?' are pulled out and reinserted at a
-                    // single fixed position later, regardless of where they
-                    // originally sat relative to neighboring punctuation.
-                    // That's fine when the mark stands alone, but if it's
-                    // directly touching another boundary character (e.g. a
-                    // closing quote or '!') on either side, pulling it out
-                    // separates it from that neighbor and scrambles the
-                    // order. In that specific case, leave it in cleanCore so
-                    // it instead flows through the same ordinary start/end
-                    // trim (and mirroring) used for '!' and quotes, which
-                    // preserves its true adjacency. A lone '؟'/'?' (the
-                    // common case) is unaffected — neither neighbor is
-                    // boundary punctuation, so it's still extracted exactly
-                    // as before.
                     val prevIsTouching = k > 0 &&
                         isBoundaryPunctuation(rawCore[k - 1]) &&
                         !rawCore[k - 1].isWhitespace()
@@ -197,63 +250,29 @@ internal object AndroidPlayerSubtitleRtlFix {
             var end = cleanCore.length
             while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
 
-            // Prevent a matched parenthesis pair from being split between
-            // the trimmed boundary punctuation and the embedded middle
-            // text (e.g. "يا (ماك)" where only the closing ')' sits on the
-            // true boundary while the '(' is interior). A split pair ends
-            // up mirrored twice — once automatically by the RLE/PDF
-            // embedding for the interior member, once manually for the
-            // extracted member — producing a duplicated-looking bracket.
-            // If the interior span has an unmatched paren, pull its
-            // partner back in from whichever side holds it. Lines with no
-            // parens (the vast majority) have depth == 0 immediately and
-            // are completely unaffected.
-            // Prevent a matched bracket/quote pair from being split between
-            // the trimmed boundary punctuation and the embedded middle
-            // text — the same issue fixed earlier for '(' ')', generalized
-            // to every bidirectionally-mirrored pair: [] {} «» and the
-            // curly/smart single quotes ‘’ (curly double quotes “” are
-            // deliberately excluded — see isBoundaryPunctuation), plus
-            // (added) the angle/corner bracket pairs ‹› 「」 〈〉 【】,
-            // which behave identically —
-            // always open/close pairs, never a standalone mark. (Straight
-            // '"' and '!' don't need this — their glyph doesn't change
-            // with direction, so a split there is invisible.) A split pair
-            // ends up mirrored twice — once automatically by the RLE/PDF
-            // embedding for the interior member, once manually for the
-            // extracted member — producing a duplicated-looking mark. If
-            // the interior span has an unmatched member of any of these
-            // pairs, pull its partner back in from whichever side holds
-            // it. Lines with none of these characters (the vast majority)
-            // are completely unaffected.
+            // حماية الأقواس المزدوجة من التفكيك الخاطئ أثناء التبديل
             run {
-                val openToClose = mapOf(
-                    '(' to ')', '[' to ']', '{' to '}',
-                    '«' to '»', '‘' to '’',
-                    '‹' to '›', '「' to '」', '〈' to '〉', '【' to '】'
-                )
-                val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
                 val depths = HashMap<Char, Int>()
 
                 for (idx in start until end) {
                     val c = cleanCore[idx]
-                    if (c in openToClose) {
+                    if (c in OPEN_TO_CLOSE) {
                         depths[c] = (depths[c] ?: 0) + 1
-                    } else if (c in closeToOpen) {
-                        val o = closeToOpen.getValue(c)
+                    } else if (c in CLOSE_TO_OPEN) {
+                        val o = CLOSE_TO_OPEN.getValue(c)
                         depths[o] = (depths[o] ?: 0) - 1
                     }
                 }
 
                 while (end < cleanCore.length) {
                     val c = cleanCore[end]
-                    val openForC = closeToOpen[c]
+                    val openForC = CLOSE_TO_OPEN[c]
                     when {
                         openForC != null && (depths[openForC] ?: 0) > 0 -> {
                             depths[openForC] = depths.getValue(openForC) - 1
                             end++
                         }
-                        c in openToClose && (depths[c] ?: 0) > 0 -> {
+                        c in OPEN_TO_CLOSE && (depths[c] ?: 0) > 0 -> {
                             depths[c] = depths.getValue(c) + 1
                             end++
                         }
@@ -262,20 +281,14 @@ internal object AndroidPlayerSubtitleRtlFix {
                 }
             }
             run {
-                val openToClose = mapOf(
-                    '(' to ')', '[' to ']', '{' to '}',
-                    '«' to '»', '‘' to '’',
-                    '‹' to '›', '「' to '」', '〈' to '〉', '【' to '】'
-                )
-                val closeToOpen = openToClose.entries.associate { (o, c) -> c to o }
                 val depths = HashMap<Char, Int>()
 
                 for (idx in start until end) {
                     val c = cleanCore[idx]
-                    if (c in openToClose) {
+                    if (c in OPEN_TO_CLOSE) {
                         depths[c] = (depths[c] ?: 0) + 1
-                    } else if (c in closeToOpen) {
-                        val o = closeToOpen.getValue(c)
+                    } else if (c in CLOSE_TO_OPEN) {
+                        val o = CLOSE_TO_OPEN.getValue(c)
                         depths[o] = (depths[o] ?: 0) - 1
                     }
                 }
@@ -283,48 +296,17 @@ internal object AndroidPlayerSubtitleRtlFix {
                 while (start > 0) {
                     val c = cleanCore[start - 1]
                     when {
-                        c in openToClose && (depths[c] ?: 0) < 0 -> {
+                        c in OPEN_TO_CLOSE && (depths[c] ?: 0) < 0 -> {
                             depths[c] = depths.getValue(c) + 1
                             start--
                         }
-                        c in closeToOpen && (depths[closeToOpen.getValue(c)] ?: 0) < 0 -> {
-                            val o = closeToOpen.getValue(c)
+                        c in CLOSE_TO_OPEN && (depths[CLOSE_TO_OPEN.getValue(c)] ?: 0) < 0 -> {
+                            val o = CLOSE_TO_OPEN.getValue(c)
                             depths[o] = depths.getValue(o) - 1
                             start--
                         }
                         else -> return@run
                     }
-                }
-            }
-
-            // Prevent a matched straight-quote pair ("...") from being
-            // split between the trimmed boundary punctuation and the
-            // embedded middle text — the same problem the bracket/curly-
-            // quote balancing above solves for bidirectionally-mirrored
-            // pairs (e.g. "( )", "“ ”"). A straight '"' uses the identical
-            // glyph for both open and close, so it can't be tracked with
-            // an open→close map the way those pairs are; parity (odd/even
-            // count within the current span) is used instead. If
-            // [start, end) holds an unmatched '"', its true partner sits
-            // just outside the span — pull it in from whichever side
-            // holds it so the pair stays together as one unit inside
-            // middleText, instead of only the leading (or only the
-            // trailing) member being extracted alone and relocated to the
-            // opposite side of the RLE/PDF embedding. Lines with no '"'
-            // (the vast majority) or with an already-balanced pair are
-            // completely unaffected.
-            run {
-                var quoteCount = 0
-                for (idx in start until end) {
-                    if (cleanCore[idx] == '"') quoteCount++
-                }
-                while (start > 0 && quoteCount % 2 != 0 && cleanCore[start - 1] == '"') {
-                    quoteCount++
-                    start--
-                }
-                while (end < cleanCore.length && quoteCount % 2 != 0 && cleanCore[end] == '"') {
-                    quoteCount++
-                    end++
                 }
             }
             
@@ -358,30 +340,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    // Interior (mid-line/mid-sentence) neutral marks that have no
-    // explicit RLE/PDF embedding of their own — unlike the leading/
-    // trailing punctuation, which is fully extracted, mirrored, and
-    // wrapped by the existing logic. Pinning each one individually with
-    // invisible RLM (right-to-left mark, U+200F) on both sides anchors
-    // its resolved direction to RTL without altering its glyph (none of
-    // these are Bidi-mirrored characters) or its position in the text.
-    // Purely additive: it only touches interior text that was already
-    // passed through untouched before, and RLM is invisible, so any
-    // occurrence that already rendered correctly is unaffected.
-    // Added: curly/smart double and single quotes (“ ” ‘ ’) — same
-    // Bidi class (Other Neutral) as the straight '"' already here, so an
-    // unpaired/interior occurrence (e.g. around a name like "الصين")
-    // needs the same RLM pin to avoid an Android-side direction flip.
-    // They are NOT added to the mirrored-pair balancing logic above:
-    // that logic exists only for applyVisualSwapping's manual
-    // char-by-char reversal, which wrapArabicLines never does — here the
-    // whole line still goes through the normal RLE/PDF embedding, so the
-    // glyph direction is resolved by the bidi algorithm itself and pinning
-    // is the only piece that was missing.
-    private val INTERIOR_PIN_CHARS = setOf(
-        '"', '„', '‚', '＂', '′', '″', '،',
-        '“', '”', '‘', '’'
-    )
+    private val INTERIOR_PIN_CHARS = setOf('"', '„', '‚', '＂', '′', '″', '،')
 
     private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
         var found = false
@@ -404,59 +363,16 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
-        // Note: '“' and '”' (curly double quotes) are intentionally NOT
-        // treated as boundary punctuation. Lines/words wrapped in this
-        // specific pair are left out of the messy-detection and
-        // leading/trailing extraction logic entirely — they always flow
-        // through wrapArabicLines untouched (still RLM-pinned via
-        // pinInteriorNeutralMarks), never through applyVisualSwapping's
-        // trim/mirror path.
-        return c == '"' || c == '\'' || c == '«' || c == '»' ||
-               c == '!' || c == '؟' || c == '?' ||
-               c == '-' || c == '—' ||
-               c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
-               c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
-               // Added — behave like the existing '"' (start+mid+end,
-               // no pairing/mirroring): low/curly quote variants that show
-               // up unpaired in old subtitle files, fullwidth quote, prime
-               // marks used as informal single-quotes, and music notes.
-               c == '„' || c == '‚' || c == '＂' || c == '′' || c == '″' ||
-               c == '♪' || c == '♫' ||
-               // Added — behaves like the existing '.' / ':' (mid+end):
-               // Arabic semicolon.
-               c == '؛' ||
-               // Added — behave like the existing '-' (start+mid, excluded
-               // from the leading-messiness check): en dash, hyphen,
-               // figure dash.
-               c == '–' || c == '‐' || c == '‒' ||
-               // Added — behave like the existing «» (paired + mirrored):
-               // single angle quotes and CJK-style bracket pairs.
-               c == '‹' || c == '›' || c == '「' || c == '」' || c == '〈' || c == '〉' || c == '【' || c == '】' ||
-               c.isWhitespace()
+        if (c in OPEN_TO_CLOSE.keys || c in CLOSE_TO_OPEN.keys || c in SYMMETRICAL_MARKS) return true
+        if (c == '!' || c == '؟' || c == '?' || c == '¡' || c == '¿') return true
+        if (c == '-' || c == '—' || c == '–' || c == '‐' || c == '‒' || c == '¬') return true
+        if (c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' || c == '؛') return true
+        if (c.isWhitespace()) return true
+        return false
     }
 
-    private fun mirrorArabicPunctuation(c: Char): Char = when (c) {
-        '(' -> ')'
-        ')' -> '('
-        '[' -> ']'
-        ']' -> '['
-        '{' -> '}'
-        '}' -> '{'
-        '«' -> '»'
-        '»' -> '«'
-        '‘' -> '’'
-        '’' -> '‘'
-        // Added — same pairing treatment as the existing «» / ‘’.
-        '‹' -> '›'
-        '›' -> '‹'
-        '「' -> '」'
-        '」' -> '「'
-        '〈' -> '〉'
-        '〉' -> '〈'
-        '【' -> '】'
-        '】' -> '【'
-        else -> c
-    }
+    // يتم استدعاء القاموس مباشرة لقلب الأقواس بطريقة ذكية وعالمية
+    private fun mirrorArabicPunctuation(c: Char): Char = OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
 
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
@@ -528,11 +444,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    private fun mirrorPunctuation(c: Char): Char = when (c) {
-        '(' -> ')'
-        ')' -> '('
-        else -> c
-    }
+    private fun mirrorPunctuation(c: Char): Char = OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
 
     private fun appendMirroredReversed(
         out: Appendable,
@@ -720,8 +632,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    // NOTE: Hebrew/general-RTL punctuation sets below are intentionally
-    // left untouched — Hebrew handling is out of scope for this change.
     private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
     private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
 }
