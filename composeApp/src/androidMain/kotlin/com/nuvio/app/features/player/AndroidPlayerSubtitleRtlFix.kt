@@ -320,6 +320,24 @@ internal object AndroidPlayerSubtitleRtlFix {
         return sb
     }
 
+    private fun containsArabic(text: CharSequence): Boolean {
+        var i = 0
+        while (i < text.length) {
+            val codePoint = Character.codePointAt(text, i)
+            if (codePoint in 0x0600..0x06FF ||
+                codePoint in 0x0750..0x077F ||
+                codePoint in 0x0870..0x08FF ||
+                codePoint in 0xFB50..0xFDFF ||
+                codePoint in 0xFE70..0xFEFF ||
+                Character.getDirectionality(codePoint) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC
+            ) {
+                return true
+            }
+            i += Character.charCount(codePoint)
+        }
+        return false
+    }
+
     private fun mirrorArabicPunctuation(c: Char): Char = BASE_BRACKETS[c] ?: getMatchingSymbol(c)
 
     private fun wrapArabicLines(text: CharSequence): CharSequence {
