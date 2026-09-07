@@ -44,8 +44,6 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     // --- الدالة المنفصلة الجديدة ---
     private fun stabilizeDialogueQuotes(text: CharSequence): CharSequence {
-        val preserveSpans = text is Spanned
-        
         val smartQuotes = setOf('”', '“', '‘', '’', '«', '»', '‹', '›', '「', '」', '〈', '〉', '【', '】')
         val straightQuotes = setOf('"', '\'')
         
@@ -67,7 +65,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             for (i in lines.indices) {
                 val line = lines[i]
                 var lineModified = false
-                val builder = if (preserveSpans) SpannableStringBuilder(line) else StringBuilder(line)
+                val builder = SpannableStringBuilder(line)
                 for (j in builder.length - 1 downTo 0) {
                     if (smartQuotes.contains(builder[j])) {
                         // التغليف بمسافة صفرية (Zero Width Space) لمنع قصها في الترجمات العشوائية
@@ -96,11 +94,11 @@ internal object AndroidPlayerSubtitleRtlFix {
                     
                     // يتأكد من وجود قوس واحد فقط في السطر الأول وقوس واحد في الأخير
                     if (l1.count { it == q } == 1 && l2.count { it == q } == 1) {
-                        val newB1 = if (preserveSpans) SpannableStringBuilder(l1) else StringBuilder(l1)
-                        val newB2 = if (preserveSpans) SpannableStringBuilder(l2) else StringBuilder(l2)
+                        val newB1 = SpannableStringBuilder(l1)
+                        val newB2 = SpannableStringBuilder(l2)
                         
-                        val q1Idx = newB1.indexOf(q)
-                        val q2Idx = newB2.indexOf(q)
+                        val q1Idx = newB1.indexOf(q.toString())
+                        val q2Idx = newB2.indexOf(q.toString())
                         
                         fun isNearStart(str: CharSequence, idx: Int): Boolean {
                             for (i in 0 until idx) {
@@ -140,12 +138,12 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         if (!modified) return text
 
-        val out = if (preserveSpans) SpannableStringBuilder() else StringBuilder()
+        val out = if (text is Spanned) SpannableStringBuilder() else StringBuilder()
         for (i in lines.indices) {
             if (i > 0) out.append('\n')
             out.append(lines[i])
         }
-        return out as CharSequence
+        return out
     }
     // --- نهاية الدالة المنفصلة ---
 
