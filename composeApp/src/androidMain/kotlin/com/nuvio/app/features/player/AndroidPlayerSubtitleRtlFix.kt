@@ -11,28 +11,30 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    private val OPEN_TO_CLOSE = mapOf(
+    // القاموس الموحد لكل الأقواس في العالم
+    private val BRACKET_PAIRS = mapOf(
         '(' to ')', '[' to ']', '{' to '}', '<' to '>',
-        '«' to '»', '»' to '«',
-        '“' to '”', '”' to '“',
-        '‘' to '’', '’' to '‘',
-        '„' to '“', '‚' to '‘',
-        '‹' to '›', '›' to '‹',
+        '«' to '»', '“' to '”', '‘' to '’',
+        '„' to '“', '‚' to '‘', '‹' to '›',
         '「' to '」', '『' to '』', '【' to '】', '〔' to '〕',
         '〖' to '〗', '《' to '》', '〈' to '〉', '〘' to '〙',
         '〚' to '〛', '⟦' to '⟧', '⟨' to '⟩', '⟪' to '⟫',
         '⟬' to '⟭', '⟮' to '⟯'
     )
 
-    private val CLOSE_TO_OPEN = OPEN_TO_CLOSE.entries.associate { (k, v) -> v to k }
+    private val OPEN_TO_CLOSE = BRACKET_PAIRS
+    private val CLOSE_TO_OPEN = BRACKET_PAIRS.entries.associate { (k, v) -> v to k }
 
-    private val SYMMETRICAL_FORMATTING = setOf(
-        '"', '\'', '＂', '＇', '′', '″', '‵', '‶', '♪', '♫', '*', '_', '|', '~', '^', '`'
-    )
+    // دالة موحدة تجلب الشريك (إذا لم يكن قوساً، فشريكه هو نفسه مثل النقاط وعلامات الاستفهام)
+    private fun getMatchingSymbol(c: Char): Char {
+        return OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
+    }
 
-    private val SYMMETRICAL_PUNCTUATION = setOf(
-        '؟', '?', '!', '.', '،', ',', ':', ';', '؛'
-    )
+    // تعريف شامل: أي شيء ليس حرفاً أو رقماً يعتبر رمزاً/علامة
+    private fun isBoundaryPunctuation(c: Char): Boolean {
+        if (c.isLetterOrDigit()) return false
+        return true
+    }
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
         val text = cue.text ?: return cue
@@ -110,102 +112,55 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
+    // الفلتر الموحد: يتحقق من المطابقة والالتصاق لبداية السطر
     private fun hasMessyLeadingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
         if (line.isEmpty()) return false
         val firstChar = line.first()
 
-        if (firstChar == '-' || firstChar == '—' || firstChar == '–' || firstChar == '‐' || firstChar == '‒' || firstChar == '¬') {
-            return false
-        }
-
-        if (firstChar == '…' || (firstChar == '.' && line.length > 1 && line[1] == '.')) {
-            return false
-        }
-
         if (!isBoundaryPunctuation(firstChar)) return false
 
-        val closingMatch = OPEN_TO_CLOSE[firstChar]
-        if (closingMatch != null) {
-            if (fullText.indexOf(closingMatch) != -1) return false
-            return true
-        }
+        val matchChar = getMatchingSymbol(firstChar)
+        var foundAttachedMatch = false
 
-        if (firstChar in SYMMETRICAL_FORMATTING) {
-            var count = 0
-            for (i in 0 until fullText.length) {
-                if (fullText[i] == firstChar) count++
-            }
-            if (count >= 2 && count % 2 == 0) return false
-            return true
-        }
-
-        if (firstChar in SYMMETRICAL_PUNCTUATION) {
-            if (line.length > 2 && !line[1].isWhitespace()) {
-                for (i in 1 until line.length) {
-                    if (line[i] == firstChar) {
-                        if (!line[i - 1].isWhitespace()) return false
-                        break
-                    } else if (line[i].isWhitespace()) {
-                        break
-                    }
+        for (i in 1 until fullText.length) {
+            if (fullText[i] == matchChar) {
+                val cNotFollowedBySpace = line.length > 1 && !line[1].isWhitespace()
+                val mNotPrecededBySpace = i > 0 && !fullText[i - 1].isWhitespace()
+                if (cNotFollowedBySpace && mNotPrecededBySpace) {
+                    foundAttachedMatch = true
+                    break
                 }
             }
-            return true
         }
 
-        return true
+        return !foundAttachedMatch
     }
 
+    // الفلتر الموحد: يتحقق من المطابقة والالتصاق لنهاية السطر
     private fun hasMessyTrailingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
         if (line.isEmpty()) return false
         val lastChar = line.last()
 
-        val isEndingPunc = lastChar == '.' || lastChar == '؟' || lastChar == '?' ||
-                           lastChar == '!' || lastChar == '،' || lastChar == ',' ||
-                           lastChar == ':' || lastChar == '…' || lastChar == '؛'
-
-        if (isEndingPunc) {
-            return false
-        }
-
-        if (lastChar == '-' || lastChar == '—' || lastChar == '–' || lastChar == '‐' || lastChar == '‒' || lastChar == '¬') {
-            return false
-        }
-
         if (!isBoundaryPunctuation(lastChar)) return false
 
-        val openingMatch = CLOSE_TO_OPEN[lastChar]
-        if (openingMatch != null) {
-            if (fullText.indexOf(openingMatch) != -1) return false
-            return true
-        }
+        val matchChar = getMatchingSymbol(lastChar)
+        var foundAttachedMatch = false
 
-        if (lastChar in SYMMETRICAL_FORMATTING) {
-            var count = 0
-            for (i in 0 until fullText.length) {
-                if (fullText[i] == lastChar) count++
-            }
-            if (count >= 2 && count % 2 == 0) return false
-            return true
-        }
-
-        if (lastChar in SYMMETRICAL_PUNCTUATION) {
-            if (line.length > 2 && !line[line.length - 2].isWhitespace()) {
-                for (i in line.length - 2 downTo 0) {
-                    if (line[i] == lastChar) {
-                        if (!line[i + 1].isWhitespace()) return false
-                        break
-                    } else if (line[i].isWhitespace()) {
-                        break
-                    }
+        for (i in 0 until fullText.length - 1) {
+            if (fullText[i] == matchChar) {
+                val mNotFollowedBySpace = i + 1 < fullText.length && !fullText[i + 1].isWhitespace()
+                val cNotPrecededBySpace = line.length > 1 && !line[line.length - 2].isWhitespace()
+                if (mNotFollowedBySpace && cNotPrecededBySpace) {
+                    foundAttachedMatch = true
+                    break
                 }
             }
-            return true
         }
 
-        return true
+        return !foundAttachedMatch
     }
 
+    // المعالجة الموحدة لقلب الترجمة العشوائية وحماية الكتل الملاصقة
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
@@ -221,111 +176,61 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
 
             val hasCr = line.lastOrNull() == '\r'
-            val rawCore = if (hasCr) line.subSequence(0, line.length - 1) else line
+            val cleanCore = if (hasCr) line.subSequence(0, line.length - 1) else line
 
-            if (rawCore.isEmpty()) {
+            if (cleanCore.isEmpty()) {
                 if (hasCr) builder.append('\r')
                 continue
             }
 
-            val cleanCore = StringBuilder()
-            var hasQuestionMark = false
-            for (k in 0 until rawCore.length) {
-                val ch = rawCore[k]
-                if (ch == '؟' || ch == '?') {
-                    val prevIsTouching = k > 0 && isBoundaryPunctuation(rawCore[k - 1]) && !rawCore[k - 1].isWhitespace()
-                    val nextIsTouching = k + 1 < rawCore.length && isBoundaryPunctuation(rawCore[k + 1]) && !rawCore[k + 1].isWhitespace()
-                    if (prevIsTouching || nextIsTouching) {
-                        cleanCore.append(ch)
-                    } else {
-                        hasQuestionMark = true
-                    }
-                } else {
-                    cleanCore.append(ch)
-                }
-            }
-
             var start = 0
-            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
+            while (start < cleanCore.length) {
+                val c = cleanCore[start]
+                if (!isBoundaryPunctuation(c)) break
+
+                if (!c.isWhitespace()) {
+                    val m = getMatchingSymbol(c)
+                    var isAttachedPair = false
+                    for (j in start + 1 until cleanCore.length) {
+                        if (cleanCore[j] == m) {
+                            val cNotFollowedBySpace = start + 1 < cleanCore.length && !cleanCore[start + 1].isWhitespace()
+                            val mNotPrecededBySpace = j > 0 && !cleanCore[j - 1].isWhitespace()
+                            if (cNotFollowedBySpace && mNotPrecededBySpace) {
+                                isAttachedPair = true
+                                break
+                            }
+                        }
+                    }
+                    if (isAttachedPair) break // وجدنا كتلة محمية، توقف عن السحب!
+                }
+                start++
+            }
 
             var end = cleanCore.length
-            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
+            while (end > start) {
+                val c = cleanCore[end - 1]
+                if (!isBoundaryPunctuation(c)) break
 
-            run {
-                val depths = HashMap<Char, Int>()
-                for (idx in start until end) {
-                    val c = cleanCore[idx]
-                    if (c in OPEN_TO_CLOSE) {
-                        depths[c] = (depths[c] ?: 0) + 1
-                    } else if (c in CLOSE_TO_OPEN) {
-                        val o = CLOSE_TO_OPEN.getValue(c)
-                        depths[o] = (depths[o] ?: 0) - 1
-                    }
-                }
-
-                while (end < cleanCore.length) {
-                    val c = cleanCore[end]
-                    val openForC = CLOSE_TO_OPEN[c]
-                    when {
-                        openForC != null && (depths[openForC] ?: 0) > 0 -> {
-                            depths[openForC] = depths.getValue(openForC) - 1
-                            end++
+                if (!c.isWhitespace()) {
+                    val m = getMatchingSymbol(c)
+                    var isAttachedPair = false
+                    for (j in 0 until end - 1) {
+                        if (cleanCore[j] == m) {
+                            val mNotFollowedBySpace = j + 1 < cleanCore.length && !cleanCore[j + 1].isWhitespace()
+                            val cNotPrecededBySpace = end - 2 >= 0 && !cleanCore[end - 2].isWhitespace()
+                            if (mNotFollowedBySpace && cNotPrecededBySpace) {
+                                isAttachedPair = true
+                                break
+                            }
                         }
-                        c in OPEN_TO_CLOSE && (depths[c] ?: 0) > 0 -> {
-                            depths[c] = depths.getValue(c) + 1
-                            end++
-                        }
-                        else -> break
                     }
+                    if (isAttachedPair) break // وجدنا كتلة محمية، توقف عن السحب!
                 }
-            }
-
-            run {
-                val depths = HashMap<Char, Int>()
-                for (idx in start until end) {
-                    val c = cleanCore[idx]
-                    if (c in OPEN_TO_CLOSE) {
-                        depths[c] = (depths[c] ?: 0) + 1
-                    } else if (c in CLOSE_TO_OPEN) {
-                        val o = CLOSE_TO_OPEN.getValue(c)
-                        depths[o] = (depths[o] ?: 0) - 1
-                    }
-                }
-
-                while (start > 0) {
-                    val c = cleanCore[start - 1]
-                    when {
-                        c in OPEN_TO_CLOSE && (depths[c] ?: 0) < 0 -> {
-                            depths[c] = depths.getValue(c) + 1
-                            start--
-                        }
-                        c in CLOSE_TO_OPEN && (depths[CLOSE_TO_OPEN.getValue(c)] ?: 0) < 0 -> {
-                            val o = CLOSE_TO_OPEN.getValue(c)
-                            depths[o] = depths.getValue(o) - 1
-                            start--
-                        }
-                        else -> break
-                    }
-                }
-            }
-
-            for (sym in SYMMETRICAL_FORMATTING) {
-                var count = 0
-                for (idx in start until end) {
-                    if (cleanCore[idx] == sym) count++
-                }
-                if (count % 2 != 0) {
-                    if (start > 0 && cleanCore[start - 1] == sym) {
-                        start--
-                    } else if (end < cleanCore.length && cleanCore[end] == sym) {
-                        end++
-                    }
-                }
+                end--
             }
 
             if (start >= end) {
                 builder.append(cleanCore)
-                if (hasQuestionMark) builder.append('؟')
                 if (hasCr) builder.append('\r')
                 continue
             }
@@ -334,18 +239,16 @@ internal object AndroidPlayerSubtitleRtlFix {
             val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
             val middleText = cleanCore.subSequence(start, end)
 
+            // قلب العلامات المنفردة العشوائية
             for (j in trailingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(trailingPunc[j]))
             }
 
+            // تجميد المنتصف والكتل المحمية بمسامير التوجيه
             builder.append('\u202B').append(pinInteriorNeutralMarks(middleText)).append('\u202C')
 
             for (j in leadingPunc.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(leadingPunc[j]))
-            }
-
-            if (hasQuestionMark) {
-                builder.append('؟')
             }
 
             if (hasCr) builder.append('\r')
@@ -353,34 +256,28 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    private val INTERIOR_PIN_CHARS = setOf('"', '„', '‚', '＂', '′', '″', '،')
-
+    // تثبيت أي علامة متبقية داخل الجملة (الكتل المحمية) لعدم تضررها
     private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
         var found = false
         for (i in text.indices) {
-            if (text[i] in INTERIOR_PIN_CHARS) {
+            val ch = text[i]
+            if (isBoundaryPunctuation(ch) && !ch.isWhitespace()) {
                 found = true
                 break
             }
         }
         if (!found) return text
-        val sb = StringBuilder(text.length + 8)
-        for (ch in text) {
-            if (ch in INTERIOR_PIN_CHARS) {
+
+        val sb = StringBuilder(text.length + 16)
+        for (i in text.indices) {
+            val ch = text[i]
+            if (isBoundaryPunctuation(ch) && !ch.isWhitespace()) {
                 sb.append('\u200F').append(ch).append('\u200F')
             } else {
                 sb.append(ch)
             }
         }
         return sb
-    }
-
-    private fun isBoundaryPunctuation(c: Char): Boolean {
-        if (c in OPEN_TO_CLOSE.keys || c in CLOSE_TO_OPEN.keys || c in SYMMETRICAL_FORMATTING || c in SYMMETRICAL_PUNCTUATION) return true
-        if (c == '¡' || c == '¿') return true
-        if (c == '-' || c == '—' || c == '–' || c == '‐' || c == '‒' || c == '¬') return true
-        if (c.isWhitespace()) return true
-        return false
     }
 
     private fun mirrorArabicPunctuation(c: Char): Char = OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
