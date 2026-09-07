@@ -12,15 +12,12 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
-        var text = cue.text ?: return cue
+        val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
             return cue
         }
 
         if (containsArabic(text)) {
-            // 1. الدالة المنفصلة: تقوم بحماية الأقواس الاستثنائية بذكاء قبل أي معالجة أخرى
-            text = stabilizeDialogueQuotes(text)
-
             val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
             
             val fixed = if (isMessy) {
@@ -29,7 +26,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 wrapArabicLines(text)
             }
             
-            if (fixed.contentEquals(cue.text)) return cue
+            if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
 
@@ -41,111 +38,6 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         return cue
     }
-
-    // --- الدالة المنفصلة الجديدة ---
-    private fun stabilizeDialogueQuotes(text: CharSequence): CharSequence {
-        val smartQuotes = setOf('”', '“', '‘', '’', '«', '»', '‹', '›', '「', '」', '〈', '〉', '【', '】')
-        val straightQuotes = setOf('"', '\'')
-        
-        var hasSmart = false
-        var hasStraight = false
-        for (i in 0 until text.length) {
-            val c = text[i]
-            if (smartQuotes.contains(c)) hasSmart = true
-            if (straightQuotes.contains(c)) hasStraight = true
-        }
-        
-        if (!hasSmart && !hasStraight) return text
-
-        val lines = text.splitByNewlines().toMutableList()
-        var modified = false
-
-        // 1. حماية وتثبيت الأقواس الذكية دائماً (مثل كلمة "الصين")
-        if (hasSmart) {
-            for (i in lines.indices) {
-                val line = lines[i]
-                var lineModified = false
-                val builder = SpannableStringBuilder(line)
-                for (j in builder.length - 1 downTo 0) {
-                    if (smartQuotes.contains(builder[j])) {
-                        // التغليف بمسافة صفرية (Zero Width Space) لمنع قصها في الترجمات العشوائية
-                        builder.insert(j + 1, "\u200B")
-                        builder.insert(j, "\u200B")
-                        lineModified = true
-                    }
-                }
-                if (lineModified) {
-                    lines[i] = builder
-                    modified = true
-                }
-            }
-        }
-
-        // 2. حماية حوارات الأسطر المتعددة فقط (مثل كلمة "الأب")
-        if (hasStraight && lines.size >= 2) {
-            val quoteChars = listOf('"', '\'')
-            for (q in quoteChars) {
-                val firstIdx = lines.indexOfFirst { it.trim().isNotEmpty() }
-                val lastIdx = lines.indexOfLast { it.trim().isNotEmpty() }
-                
-                if (firstIdx != -1 && lastIdx != -1 && firstIdx != lastIdx) {
-                    val l1 = lines[firstIdx]
-                    val l2 = lines[lastIdx]
-                    
-                    // يتأكد من وجود قوس واحد فقط في السطر الأول وقوس واحد في الأخير
-                    if (l1.count { it == q } == 1 && l2.count { it == q } == 1) {
-                        val newB1 = SpannableStringBuilder(l1)
-                        val newB2 = SpannableStringBuilder(l2)
-                        
-                        val q1Idx = newB1.indexOf(q.toString())
-                        val q2Idx = newB2.indexOf(q.toString())
-                        
-                        fun isNearStart(str: CharSequence, idx: Int): Boolean {
-                            for (i in 0 until idx) {
-                                if (!str[i].isWhitespace() && !isDirectionalMark(str[i])) return false
-                            }
-                            return true
-                        }
-
-                        fun isNearEnd(str: CharSequence, idx: Int): Boolean {
-                            for (i in idx + 1 until str.length) {
-                                if (!str[i].isWhitespace() && !isDirectionalMark(str[i])) return false
-                            }
-                            return true
-                        }
-                        
-                        val q1Start = isNearStart(newB1, q1Idx)
-                        val q1End = isNearEnd(newB1, q1Idx)
-                        val q2Start = isNearStart(newB2, q2Idx)
-                        val q2End = isNearEnd(newB2, q2Idx)
-
-                        // يتدخل فقط إذا كان أحد الأقواس في البداية والآخر في النهاية (متعاكسان)
-                        if ((q1Start && q2End) || (q1End && q2Start)) {
-                            newB1.insert(q1Idx + 1, "\u200B")
-                            newB1.insert(q1Idx, "\u200B")
-                            
-                            newB2.insert(q2Idx + 1, "\u200B")
-                            newB2.insert(q2Idx, "\u200B")
-                            
-                            lines[firstIdx] = newB1
-                            lines[lastIdx] = newB2
-                            modified = true
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!modified) return text
-
-        val out = if (text is Spanned) SpannableStringBuilder() else StringBuilder()
-        for (i in lines.indices) {
-            if (i > 0) out.append('\n')
-            out.append(lines[i])
-        }
-        return out
-    }
-    // --- نهاية الدالة المنفصلة ---
 
     fun fixTimedCues(
         cues: List<CuesWithTiming>,
@@ -433,10 +325,29 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    // تمت إضافة الأقواس الذكية هنا لضمان إعطائها التثبيت والاتجاه المناسب داخل النص
+    // Interior (mid-line/mid-sentence) neutral marks that have no
+    // explicit RLE/PDF embedding of their own — unlike the leading/
+    // trailing punctuation, which is fully extracted, mirrored, and
+    // wrapped by the existing logic. Pinning each one individually with
+    // invisible RLM (right-to-left mark, U+200F) on both sides anchors
+    // its resolved direction to RTL without altering its glyph (none of
+    // these are Bidi-mirrored characters) or its position in the text.
+    // Purely additive: it only touches interior text that was already
+    // passed through untouched before, and RLM is invisible, so any
+    // occurrence that already rendered correctly is unaffected.
+    // Added: curly/smart double and single quotes (“ ” ‘ ’) — same
+    // Bidi class (Other Neutral) as the straight '"' already here, so an
+    // unpaired/interior occurrence (e.g. around a name like "الصين")
+    // needs the same RLM pin to avoid an Android-side direction flip.
+    // They are NOT added to the mirrored-pair balancing logic above:
+    // that logic exists only for applyVisualSwapping's manual
+    // char-by-char reversal, which wrapArabicLines never does — here the
+    // whole line still goes through the normal RLE/PDF embedding, so the
+    // glyph direction is resolved by the bidi algorithm itself and pinning
+    // is the only piece that was missing.
     private val INTERIOR_PIN_CHARS = setOf(
         '"', '„', '‚', '＂', '′', '″', '،',
-        '”', '“', '‘', '’', '«', '»', '‹', '›', '「', '」', '〈', '〉', '【', '】'
+        '“', '”', '‘', '’'
     )
 
     private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
