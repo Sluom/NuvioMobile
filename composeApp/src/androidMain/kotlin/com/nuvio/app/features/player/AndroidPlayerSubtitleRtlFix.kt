@@ -11,97 +11,78 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
-    private const val DEFAULT_CUE_DURATION_US = 5_000_000L
-    private const val MAX_PUNCTUATION_SCAN_DEPTH = 20
-
-    private val BASE_BRACKETS = mapOf(
+    private val OPEN_TO_CLOSE = mapOf(
         '(' to ')', '[' to ']', '{' to '}', '<' to '>',
-        '«' to '»', '“' to '”', '‘' to '’',
-        '‹' to '›', '「' to '」', '『' to '』',
+        '«' to '»', '»' to '«', '“' to '”', '”' to '“',
+        '‘' to '’', '’' to '‘', '„' to '“', '‚' to '‘',
+        '‹' to '›', '›' to '‹', '「' to '」', '『' to '』',
         '【' to '】', '〔' to '〕', '〖' to '〗', '《' to '》',
         '〈' to '〉', '〘' to '〙', '〚' to '〛', '⟦' to '⟧',
         '⟨' to '⟩', '⟪' to '⟫', '⟬' to '⟭', '⟮' to '⟯',
         '⦃' to '⦄', '⦅' to '⦆', '⸢' to '⸣', '⸤' to '⸥',
-        '〝' to '〞'
+        '〝' to '〞', '〞' to '〝', '〟' to '〝'
     )
+
+    // Built explicitly rather than derived by reversing OPEN_TO_CLOSE.
+    // Reason: some chars (“, ‘, 〝) appear as the *value* of more than one
+    // OPEN_TO_CLOSE entry (a symmetric quote pair plus a language-specific
+    // low-quote variant such as „ or ‚). Naively reversing OPEN_TO_CLOSE
+    // with associate{} silently drops one of those entries on key collision.
+    // „ and ‚ are intentionally absent here: they only ever function as
+    // openers (see OPEN_TO_CLOSE), never as closers, so they don't belong
+    // in this map at all.
+    private val CLOSE_TO_OPEN = mapOf(
+        ')' to '(', ']' to '[', '}' to '{', '>' to '<',
+        '»' to '«', '«' to '»',
+        '”' to '“', '“' to '”',
+        '’' to '‘', '‘' to '’',
+        '›' to '‹', '‹' to '›',
+        '」' to '「', '』' to '『',
+        '】' to '【', '〕' to '〔', '〗' to '〖', '》' to '《',
+        '〉' to '〈', '〙' to '〘', '〛' to '〚', '⟧' to '⟦',
+        '⟩' to '⟨', '⟫' to '⟪', '⟭' to '⟬', '⟯' to '⟮',
+        '⦄' to '⦃', '⦆' to '⦅', '⸣' to '⸢', '⸥' to '⸤',
+        '〞' to '〝', '〝' to '〞', '〟' to '〝'
+    )
+
+    // Bounds how many consecutive boundary-punctuation characters we'll walk
+    // in from an edge while looking for an "attached pair" partner in
+    // applyVisualSwapping. Without this cap, a subtitle line crafted (or
+    // corrupted) with a long run of punctuation at its start/end makes that
+    // scan effectively O(n^2): each step re-scans the remaining line for a
+    // match. Real subtitle lines never stack more than a few marks at an
+    // edge, so this cap changes nothing for legitimate input while making
+    // the worst case linear again.
+    private const val MAX_BOUNDARY_PUNCTUATION_DEPTH = 12
 
     private val SYMMETRICAL_SYMBOLS = setOf(
         '"', '\'', '＂', '＇', '′', '″', '‵', '‶',
-        '♪', '♫', '♬', '♩', '*', '_', '|', '~', '^', '`',
-        '#', '=', '+', '%', '•', '°'
+        '♪', '♫', '♬', '♩', '🎵', '🎶', '*', '_', '|', '~', '^', '`',
+        '#', '=', '+', '%', '•', '°', '؟', '?', '!', '.',
+        '،', ',', ':', ';', '؛'
     )
 
-    private val TERMINAL_PUNCTUATION = setOf('؟', '?', '!', '.', '،', ',', ':', ';', '؛')
-    private val DASHES = setOf('-', '—', '–', '‐', '‒', '¬')
-
     private fun getMatchingSymbol(c: Char): Char {
-        BASE_BRACKETS[c]?.let { return it }
-        for ((open, close) in BASE_BRACKETS) {
-            if (close == c) return open
-        }
-        return c
+        return OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
-        return BASE_BRACKETS.containsKey(c) || BASE_BRACKETS.containsValue(c) ||
-               c in SYMMETRICAL_SYMBOLS || c in TERMINAL_PUNCTUATION || c in DASHES
-    }
-
-    private fun isUnbalancedInLine(c: Char, line: CharSequence): Boolean {
-        if (c in SYMMETRICAL_SYMBOLS) {
-            var count = 0
-            for (i in line.indices) {
-                if (line[i] == c) count++
-            }
-            return count % 2 != 0
-        }
-
-        if (BASE_BRACKETS.containsKey(c) || BASE_BRACKETS.containsValue(c)) {
-            val open = if (BASE_BRACKETS.containsKey(c)) c else getMatchingSymbol(c)
-            val close = BASE_BRACKETS[open] ?: return false
-            var openCount = 0
-            var closeCount = 0
-            for (i in line.indices) {
-                if (line[i] == open) openCount++
-                else if (line[i] == close) closeCount++
-            }
-            return openCount != closeCount
-        }
-
-        return false
+        if (c.isLetterOrDigit()) return false
+        return true
     }
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
         val text = cue.text ?: return cue
-        
-        var hasArabic = false
-        var hasHebrew = false
-        var hasRtl = false
+        if (!hasAnyRtlCharacter(text)) return cue
 
-        for (i in 0 until text.length) {
-            val codePoint = Character.codePointAt(text, i)
-            val d = Character.getDirectionality(codePoint)
-            
-            if (codePoint in 0x0600..0x08FF || codePoint in 0xFB50..0xFDFF || codePoint in 0xFE70..0xFEFF || d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC) {
-                hasArabic = true
-                hasRtl = true
-                break 
-            } else if (codePoint in 0x0590..0x05FF || codePoint in 0xFB1D..0xFB4F || d == Character.DIRECTIONALITY_RIGHT_TO_LEFT) {
-                hasHebrew = true
-                hasRtl = true
-            }
-        }
-
-        if (!hasRtl) return cue
-
-        if (hasArabic) {
+        if (containsArabic(text)) {
             val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
             val fixed = if (isMessy) applyVisualSwapping(text) else wrapArabicLines(text)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
 
-        if (hasHebrew) {
+        if (containsRtlChars(text)) {
             val fixed = fixHebrewLines(text, isBuiltInSubtitle) ?: return cue
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
@@ -148,7 +129,7 @@ internal object AndroidPlayerSubtitleRtlFix {
             entry.durationUs != C.TIME_UNSET -> entry.durationUs
             entry.endTimeUs != C.TIME_UNSET && entry.startTimeUs != C.TIME_UNSET ->
                 (entry.endTimeUs - entry.startTimeUs).coerceAtLeast(1L)
-            else -> DEFAULT_CUE_DURATION_US
+            else -> 5_000_000L
         }
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
@@ -167,62 +148,94 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun hasMessyLeadingBoundary(line: CharSequence): Boolean {
-        var start = 0
-        var isMessy = false
+        if (line.isEmpty()) return false
         
-        while (start < line.length && start < MAX_PUNCTUATION_SCAN_DEPTH) {
+        var start = 0
+        while (start < line.length) {
             val c = line[start]
-            if (c.isWhitespace()) {
+            if (c.isWhitespace() || c == '-' || c == '—' || c == '–' || c == '‐' || c == '‒' || c == '¬') {
                 start++
-                continue
+            } else {
+                break
             }
-            if (!isBoundaryPunctuation(c)) break
-
-            if (c == '…' || (c == '.' && start + 2 < line.length && line[start+1] == '.' && line[start+2] == '.')) {
-                isMessy = true
-            } else if (c in TERMINAL_PUNCTUATION) {
-                isMessy = true
-            } else if (BASE_BRACKETS.containsValue(c)) { 
-                isMessy = true 
-            } else if (isUnbalancedInLine(c, line)) {
-                isMessy = true
-            }
-            start++
         }
-        return isMessy
+        
+        if (start >= line.length) return false
+        val firstChar = line[start]
+
+        if (!isBoundaryPunctuation(firstChar)) return false
+
+        if (firstChar == '؟' || firstChar == '?' || firstChar == '!' || firstChar == '.' ||
+            firstChar == '،' || firstChar == ',' || firstChar == ':' || firstChar == '؛' || firstChar == ';') {
+            return true
+        }
+
+        if (firstChar == '…' || (firstChar == '.' && start + 2 < line.length && line[start+1] == '.' && line[start+2] == '.')) {
+             return true
+        }
+
+        if (CLOSE_TO_OPEN.containsKey(firstChar)) return true
+
+        val matchChar = getMatchingSymbol(firstChar)
+        var foundAttachedMatch = false
+        for (i in start + 1 until line.length) {
+            if (line[i] == matchChar) {
+                val cNotFollowedBySpace = start + 1 < line.length && !line[start + 1].isWhitespace()
+                val mNotPrecededBySpace = i > 0 && !line[i - 1].isWhitespace()
+                if (cNotFollowedBySpace && mNotPrecededBySpace) {
+                    foundAttachedMatch = true
+                    break
+                }
+            }
+        }
+        return !foundAttachedMatch
     }
 
     private fun hasMessyTrailingBoundary(line: CharSequence): Boolean {
-        var end = line.length
-        var depth = 0
-        var isMessy = false
+        if (line.isEmpty()) return false
         
-        while (end > 0 && depth < MAX_PUNCTUATION_SCAN_DEPTH) {
+        var end = line.length
+        while (end > 0) {
             val c = line[end - 1]
-            if (c.isWhitespace()) {
+            if (c.isWhitespace() || c == '-' || c == '—' || c == '–' || c == '‐' || c == '‒' || c == '¬') {
                 end--
-                depth++
-                continue
+            } else {
+                break
             }
-            if (!isBoundaryPunctuation(c)) break
-
-            if (c in DASHES) {
-                isMessy = true 
-            } else if (BASE_BRACKETS.containsKey(c)) { 
-                isMessy = true 
-            } else if (isUnbalancedInLine(c, line)) {
-                isMessy = true
-            }
-            end--
-            depth++
         }
-        return isMessy
+        
+        if (end <= 0) return false
+        val lastChar = line[end - 1]
+
+        val isEndingPunc = lastChar == '.' || lastChar == '؟' || lastChar == '?' ||
+                           lastChar == '!' || lastChar == '،' || lastChar == ',' ||
+                           lastChar == ':' || lastChar == '؛' || lastChar == ';' ||
+                           lastChar == '…'
+        if (isEndingPunc) return false
+
+        if (OPEN_TO_CLOSE.containsKey(lastChar)) return true
+
+        if (!isBoundaryPunctuation(lastChar)) return false
+
+        val matchChar = getMatchingSymbol(lastChar)
+        var foundAttachedMatch = false
+        for (i in 0 until end - 1) {
+            if (line[i] == matchChar) {
+                val mNotFollowedBySpace = i + 1 < line.length && !line[i + 1].isWhitespace()
+                val cNotPrecededBySpace = end - 2 >= 0 && !line[end - 2].isWhitespace()
+                if (mNotFollowedBySpace && cNotPrecededBySpace) {
+                    foundAttachedMatch = true
+                    break
+                }
+            }
+        }
+        return !foundAttachedMatch
     }
 
     private fun applyVisualSwapping(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(text.length + 16)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
 
         for (i in lines.indices) {
             if (i > 0) builder.append('\n')
@@ -241,86 +254,87 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
 
-            var start = 0
-            while (start < cleanCore.length && start < MAX_PUNCTUATION_SCAN_DEPTH) {
+            var preserveStart = 0
+            while (preserveStart < cleanCore.length) {
+                val c = cleanCore[preserveStart]
+                if (c.isWhitespace() || c == '-' || c == '—' || c == '–' || c == '‐' || c == '‒' || c == '¬') {
+                    preserveStart++
+                } else {
+                    break
+                }
+            }
+
+            var preserveEnd = cleanCore.length
+            while (preserveEnd > preserveStart) {
+                val c = cleanCore[preserveEnd - 1]
+                if (c.isWhitespace() || c == '-' || c == '—' || c == '–' || c == '‐' || c == '‒' || c == '¬') {
+                    preserveEnd--
+                } else {
+                    break
+                }
+            }
+
+            var start = preserveStart
+            while (start < preserveEnd && start - preserveStart < MAX_BOUNDARY_PUNCTUATION_DEPTH) {
                 val c = cleanCore[start]
-                if (c.isWhitespace() || isBoundaryPunctuation(c)) start++
-                else break
+                if (!isBoundaryPunctuation(c)) break
+
+                if (!c.isWhitespace()) {
+                    val m = getMatchingSymbol(c)
+                    var isAttachedPair = false
+                    for (j in start + 1 until preserveEnd) {
+                        if (cleanCore[j] == m) {
+                            val cNotFollowedBySpace = start + 1 < cleanCore.length && !cleanCore[start + 1].isWhitespace()
+                            val mNotPrecededBySpace = j > 0 && !cleanCore[j - 1].isWhitespace()
+                            if (cNotFollowedBySpace && mNotPrecededBySpace) {
+                                isAttachedPair = true
+                                break
+                            }
+                        }
+                    }
+                    if (isAttachedPair) break
+                }
+                start++
             }
 
-            var end = cleanCore.length
-            var depth = 0
-            while (end > start && depth < MAX_PUNCTUATION_SCAN_DEPTH) {
+            var end = preserveEnd
+            while (end > start && preserveEnd - end < MAX_BOUNDARY_PUNCTUATION_DEPTH) {
                 val c = cleanCore[end - 1]
-                if (c.isWhitespace() || isBoundaryPunctuation(c)) {
-                    end--
-                    depth++
-                } else break
-            }
+                if (!isBoundaryPunctuation(c)) break
 
-            var extractedDashChar: Char? = null
-            val misplacedStart = java.lang.StringBuilder()
-            for (j in 0 until start) {
-                val c = cleanCore[j]
-                if (c in DASHES && extractedDashChar == null) {
-                    extractedDashChar = c
-                } else if (!c.isWhitespace()) {
-                    misplacedStart.append(c)
+                if (!c.isWhitespace()) {
+                    val m = getMatchingSymbol(c)
+                    var isAttachedPair = false
+                    for (j in preserveStart until end - 1) {
+                        if (cleanCore[j] == m) {
+                            val mNotFollowedBySpace = j + 1 < cleanCore.length && !cleanCore[j + 1].isWhitespace()
+                            val cNotPrecededBySpace = end - 2 >= 0 && !cleanCore[end - 2].isWhitespace()
+                            if (mNotFollowedBySpace && cNotPrecededBySpace) {
+                                isAttachedPair = true
+                                break
+                            }
+                        }
+                    }
+                    if (isAttachedPair) break
                 }
+                end--
             }
 
-            val misplacedEnd = java.lang.StringBuilder()
-            for (j in end until cleanCore.length) {
-                val c = cleanCore[j]
-                if (c in DASHES && extractedDashChar == null) {
-                    extractedDashChar = c
-                } else if (!c.isWhitespace()) {
-                    misplacedEnd.append(c)
-                }
-            }
-
-            val terminals = java.lang.StringBuilder()
-            val cleanEnd = java.lang.StringBuilder()
-            for (j in misplacedEnd.indices) {
-                val c = misplacedEnd[j]
-                if (c in TERMINAL_PUNCTUATION) {
-                    terminals.append(c)
-                } else {
-                    cleanEnd.append(c)
-                }
-            }
-
-            val cleanStart = java.lang.StringBuilder()
-            for (j in misplacedStart.indices) {
-                val c = misplacedStart[j]
-                if (c in TERMINAL_PUNCTUATION) {
-                    terminals.append(c)
-                } else {
-                    cleanStart.append(c)
-                }
-            }
-
-            val reversedEnd = java.lang.StringBuilder()
-            for (j in cleanEnd.indices.reversed()) {
-                reversedEnd.append(mirrorArabicPunctuation(cleanEnd[j]))
-            }
-
-            val reversedStart = java.lang.StringBuilder()
-            for (j in cleanStart.indices.reversed()) {
-                reversedStart.append(mirrorArabicPunctuation(cleanStart[j]))
-            }
-
+            val structuralStart = cleanCore.subSequence(0, preserveStart)
+            val structuralEnd = cleanCore.subSequence(preserveEnd, cleanCore.length)
+            val misplacedStart = cleanCore.subSequence(preserveStart, start)
+            val misplacedEnd = cleanCore.subSequence(end, preserveEnd)
             val middleText = cleanCore.subSequence(start, end)
 
             builder.append('\u202B')
-            if (extractedDashChar != null) {
-                builder.append(extractedDashChar)
+            for (j in misplacedEnd.indices.reversed()) {
+                builder.append(mirrorArabicPunctuation(misplacedEnd[j]))
             }
-            builder.append(reversedEnd)
+            builder.append(structuralStart)
             builder.append(pinInteriorNeutralMarks(middleText))
-            builder.append(reversedStart)
-            if (terminals.isNotEmpty()) {
-                builder.append(terminals)
+            builder.append(structuralEnd)
+            for (j in misplacedStart.indices.reversed()) {
+                builder.append(mirrorArabicPunctuation(misplacedStart[j]))
             }
             builder.append('\u202C')
 
@@ -340,7 +354,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
         if (!found) return text
 
-        val sb = java.lang.StringBuilder(text.length + 16)
+        val sb = StringBuilder(text.length + 16)
         for (i in text.indices) {
             val ch = text[i]
             if (isBoundaryPunctuation(ch)) {
@@ -352,29 +366,11 @@ internal object AndroidPlayerSubtitleRtlFix {
         return sb
     }
 
-    private fun containsArabic(text: CharSequence): Boolean {
-        var i = 0
-        while (i < text.length) {
-            val codePoint = Character.codePointAt(text, i)
-            if (codePoint in 0x0600..0x06FF ||
-                codePoint in 0x0750..0x077F ||
-                codePoint in 0x0870..0x08FF ||
-                codePoint in 0xFB50..0xFDFF ||
-                codePoint in 0xFE70..0xFEFF ||
-                Character.getDirectionality(codePoint) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC
-            ) {
-                return true
-            }
-            i += Character.charCount(codePoint)
-        }
-        return false
-    }
-
-    private fun mirrorArabicPunctuation(c: Char): Char = BASE_BRACKETS[c] ?: getMatchingSymbol(c)
+    private fun mirrorArabicPunctuation(c: Char): Char = OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
 
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(text.length + 8)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
         val lines = text.splitByNewlines()
         for (i in lines.indices) {
             if (i > 0) builder.append('\n')
@@ -400,7 +396,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(text.length)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)
         val lines = text.splitByNewlines()
         var changed = false
         for (i in lines.indices) {
@@ -420,11 +416,29 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun finishBuilder(builder: Appendable): CharSequence = when (builder) {
         is SpannableStringBuilder -> builder
-        is java.lang.StringBuilder -> builder.toString()
+        is StringBuilder -> builder.toString()
         else -> builder.toString()
     }
 
-    private fun mirrorPunctuation(c: Char): Char = BASE_BRACKETS[c] ?: getMatchingSymbol(c)
+    private fun containsArabic(text: CharSequence): Boolean {
+        var i = 0
+        while (i < text.length) {
+            val codePoint = Character.codePointAt(text, i)
+            if (codePoint in 0x0600..0x06FF ||
+                codePoint in 0x0750..0x077F ||
+                codePoint in 0x0870..0x08FF ||
+                codePoint in 0xFB50..0xFDFF ||
+                codePoint in 0xFE70..0xFEFF ||
+                Character.getDirectionality(codePoint) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC
+            ) {
+                return true
+            }
+            i += Character.charCount(codePoint)
+        }
+        return false
+    }
+
+    private fun mirrorPunctuation(c: Char): Char = OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
 
     private fun appendMirroredReversed(out: Appendable, line: CharSequence, from: Int, toExclusive: Int) {
         if (from >= toExclusive) return
@@ -472,7 +486,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         if (start == 0 && end == end0) return line
 
-        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(end0)
+        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
         appendMirroredReversed(out, line, end, end0)
         out.append(line.subSequence(start, end))
         appendMirroredReversed(out, line, 0, start)
@@ -490,7 +504,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         while (end < end0 && line[end] in MOBILE_RTL_PUNCTUATION) end++
         if (end == 0) return line
 
-        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(end0)
+        val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
         out.append(line.subSequence(end, end0)).append(line.subSequence(0, end))
         if (hasCr) out.append('\r')
         return finishBuilder(out)
@@ -500,7 +514,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         val hasMarker = (0 until length).any { isDirectionalMark(this[it]) }
         if (!hasMarker) return this
         if (this !is Spanned) {
-            val sb = java.lang.StringBuilder(length)
+            val sb = StringBuilder(length)
             for (ch in this) if (!isDirectionalMark(ch)) sb.append(ch)
             return sb.toString()
         }
@@ -533,6 +547,57 @@ internal object AndroidPlayerSubtitleRtlFix {
     private fun isRtlPunctuation(ch: Char, isEnd: Boolean): Boolean {
         if (isEnd && ch.isDigit()) return false
         return ch in RTL_PUNCTUATION || ch.isWhitespace()
+    }
+
+    private fun containsRtlChars(text: CharSequence): Boolean {
+        var i = 0
+        while (i < text.length) {
+            val codePoint = Character.codePointAt(text, i)
+            if (codePoint in 0x0590..0x05FF ||
+                codePoint in 0xFB1D..0xFB4F ||
+                codePoint in 0x0600..0x06FF ||
+                codePoint in 0x0750..0x077F ||
+                codePoint in 0x0870..0x08FF ||
+                codePoint in 0xFB50..0xFDFF ||
+                codePoint in 0xFE70..0xFEFF
+            ) {
+                return true
+            }
+
+            val d = Character.getDirectionality(codePoint)
+            if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
+                d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC ||
+                d == Character.DIRECTIONALITY_ARABIC_NUMBER
+            ) {
+                return true
+            }
+            i += Character.charCount(codePoint)
+        }
+        return false
+    }
+
+    private fun hasAnyRtlCharacter(text: CharSequence): Boolean {
+        var i = 0
+        val len = text.length
+        while (i < len) {
+            val codePoint = Character.codePointAt(text, i)
+            if (codePoint >= 0x0590) {
+                if (codePoint in 0x0590..0x08FF ||
+                    codePoint in 0xFB1D..0xFEFF
+                ) {
+                    return true
+                }
+                val d = Character.getDirectionality(codePoint)
+                if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
+                    d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC ||
+                    d == Character.DIRECTIONALITY_ARABIC_NUMBER
+                ) {
+                    return true
+                }
+            }
+            i += Character.charCount(codePoint)
+        }
+        return false
     }
 
     private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
