@@ -32,18 +32,14 @@ internal object AndroidPlayerSubtitleRtlFix {
         '،', ',', ':', ';', '؛', '-', '—', '–', '‐', '‒', '¬'
     )
 
-    // مجموعة الشارحات التي لها الأولوية (باستثناء الشارحة الطويلة '—')
+    // مجموعة الشارحات التي لها الأولوية في بداية السطر (باستثناء الشارحة الطويلة '—')
     private val SHORT_DASHES = setOf('-', '‐', '‒', '–')
-
-    private fun getMatchingSymbol(c: Char): Char {
-        return OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
-    }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
         return c in OPEN_TO_CLOSE || c in CLOSE_TO_OPEN || c in SYMMETRICAL_SYMBOLS
     }
 
-    // دالة جديدة لمنح الأولوية المطلقة للشارحة في بداية السطر
+    // رفع الشارحات القصيرة لأقصى اليمين قبل التغليف
     private fun hoistDialogueDashes(line: CharSequence): CharSequence {
         if (line.isEmpty()) return line
 
@@ -70,7 +66,6 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         if (!hasDash) return line
 
-        // الحفاظ على خصائص Spanned في حال وجودها
         if (line is Spanned) {
             val ssb = SpannableStringBuilder()
             for (i in prefix.indices) {
@@ -96,9 +91,9 @@ internal object AndroidPlayerSubtitleRtlFix {
         val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) return cue
 
+        // الاعتماد حصراً على التغليف الاتجاهي للنصوص العربية
         if (containsArabic(text)) {
-            val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
-            val fixed = if (isMessy) applyVisualSwapping(text) else wrapArabicLines(text)
+            val fixed = wrapArabicLines(text)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -155,157 +150,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
-        if (isBuiltInSubtitle) return false
-        val lines = text.splitByNewlines()
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-            if (hasMessyLeadingBoundary(trimmed, text) || hasMessyTrailingBoundary(trimmed, text)) {
-                return true
-            }
-        }
-        return false
-    }
-
-    private fun hasMessyLeadingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
-        if (line.isEmpty()) return false
-        val firstChar = line.first()
-
-        if (!isBoundaryPunctuation(firstChar)) return false
-
-        val matchChar = getMatchingSymbol(firstChar)
-        var foundAttachedMatch = false
-
-        for (i in 1 until fullText.length) {
-            if (fullText[i] == matchChar) {
-                val cNotFollowedBySpace = line.length > 1 && !line[1].isWhitespace()
-                val mNotPrecededBySpace = i > 0 && !fullText[i - 1].isWhitespace()
-                if (cNotFollowedBySpace && mNotPrecededBySpace) {
-                    foundAttachedMatch = true
-                    break
-                }
-            }
-        }
-
-        return !foundAttachedMatch
-    }
-
-    private fun hasMessyTrailingBoundary(line: CharSequence, fullText: CharSequence): Boolean {
-        if (line.isEmpty()) return false
-        val lastChar = line.last()
-
-        if (!isBoundaryPunctuation(lastChar)) return false
-
-        val matchChar = getMatchingSymbol(lastChar)
-        var foundAttachedMatch = false
-
-        for (i in 0 until fullText.length - 1) {
-            if (fullText[i] == matchChar) {
-                val mNotFollowedBySpace = i + 1 < fullText.length && !fullText[i + 1].isWhitespace()
-                val cNotPrecededBySpace = line.length > 1 && !line[line.length - 2].isWhitespace()
-                if (mNotFollowedBySpace && cNotPrecededBySpace) {
-                    foundAttachedMatch = true
-                    break
-                }
-            }
-        }
-
-        return !foundAttachedMatch
-    }
-
-    private fun applyVisualSwapping(text: CharSequence): CharSequence {
-        val preserveSpans = text is Spanned
-        val lines = text.splitByNewlines()
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
-
-        for (i in lines.indices) {
-            if (i > 0) builder.append('\n')
-            var line = lines[i].stripDirectionalWrap()
-            
-            // تطبيق أولوية الشارحة هنا
-            line = hoistDialogueDashes(line)
-
-            if (line.isEmpty() || !containsArabic(line)) {
-                builder.append(line)
-                continue
-            }
-
-            val hasCr = line.lastOrNull() == '\r'
-            val cleanCore = if (hasCr) line.subSequence(0, line.length - 1) else line
-
-            if (cleanCore.isEmpty()) {
-                if (hasCr) builder.append('\r')
-                continue
-            }
-
-            var start = 0
-            while (start < cleanCore.length) {
-                val c = cleanCore[start]
-                if (!isBoundaryPunctuation(c)) break
-
-                val m = getMatchingSymbol(c)
-                var isAttachedPair = false
-                for (j in start + 1 until cleanCore.length) {
-                    if (cleanCore[j] == m) {
-                        val cNotFollowedBySpace = start + 1 < cleanCore.length && !cleanCore[start + 1].isWhitespace()
-                        val mNotPrecededBySpace = j > 0 && !cleanCore[j - 1].isWhitespace()
-                        if (cNotFollowedBySpace && mNotPrecededBySpace) {
-                            isAttachedPair = true
-                            break
-                        }
-                    }
-                }
-                if (isAttachedPair) break
-                start++
-            }
-
-            var end = cleanCore.length
-            while (end > start) {
-                val c = cleanCore[end - 1]
-                if (!isBoundaryPunctuation(c)) break
-
-                val m = getMatchingSymbol(c)
-                var isAttachedPair = false
-                for (j in 0 until end - 1) {
-                    if (cleanCore[j] == m) {
-                        val mNotFollowedBySpace = j + 1 < cleanCore.length && !cleanCore[j + 1].isWhitespace()
-                        val cNotPrecededBySpace = end - 2 >= 0 && !cleanCore[end - 2].isWhitespace()
-                        if (mNotFollowedBySpace && cNotPrecededBySpace) {
-                            isAttachedPair = true
-                            break
-                        }
-                    }
-                }
-                if (isAttachedPair) break
-                end--
-            }
-
-            if (start >= end) {
-                builder.append(cleanCore)
-                if (hasCr) builder.append('\r')
-                continue
-            }
-
-            val leadingPunc = cleanCore.subSequence(0, start)
-            val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
-            val middleText = cleanCore.subSequence(start, end)
-
-            for (j in trailingPunc.indices.reversed()) {
-                builder.append(mirrorArabicPunctuation(trailingPunc[j]))
-            }
-
-            builder.append('\u202B').append(pinInteriorNeutralMarks(middleText)).append('\u202C')
-
-            for (j in leadingPunc.indices.reversed()) {
-                builder.append(mirrorArabicPunctuation(leadingPunc[j]))
-            }
-
-            if (hasCr) builder.append('\r')
-        }
-        return finishBuilder(builder)
-    }
-
+    // تثبيت الرموز الداخلية باستخدام محرف (RLM)
     private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
         var found = false
         for (i in text.indices) {
@@ -329,31 +174,37 @@ internal object AndroidPlayerSubtitleRtlFix {
         return sb
     }
 
-    private fun mirrorArabicPunctuation(c: Char): Char = OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
-
+    // دالة التغليف الاتجاهي الشامل (المسار المعتمد الوحيد)
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
         val lines = text.splitByNewlines()
+        
         for (i in lines.indices) {
             if (i > 0) builder.append('\n')
+            
             var line = lines[i].stripDirectionalWrap()
             
-            // تطبيق أولوية الشارحة هنا
+            // استدعاء دالة الأولوية للشارحة
             line = hoistDialogueDashes(line)
 
             if (line.isEmpty()) {
                 builder.append(line)
                 continue
             }
+            
             val hasCr = line.lastOrNull() == '\r'
             val core = if (hasCr) line.subSequence(0, line.length - 1) else line
+            
             if (core.isEmpty()) {
                 builder.append(line)
                 continue
             }
 
+            // تثبيت الرموز الداخلية أولاً
             val pinnedCore = pinInteriorNeutralMarks(core)
+            
+            // كبسلة السطر بالكامل: RLM + RLE + Text + PDF + RLM
             builder.append('\u200F').append('\u202B').append(pinnedCore).append('\u202C').append('\u200F')
 
             if (hasCr) builder.append('\r')
