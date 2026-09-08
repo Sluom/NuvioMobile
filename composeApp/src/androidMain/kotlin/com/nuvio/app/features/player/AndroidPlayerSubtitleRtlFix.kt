@@ -9,7 +9,7 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.CuesWithTiming
 
-internal object PlayerSubtitleRtlFix {
+internal object AndroidPlayerSubtitleRtlFix {
 
     // Remembers whether the last cue *with an actual letter* in it was Arabic.
     // Used to infer direction for symbol-only cues (e.g. "* * *" or "» «" scene
