@@ -14,25 +14,29 @@ internal object AndroidPlayerSubtitleRtlFix {
     private const val DEFAULT_CUE_DURATION_US = 5_000_000L
     private const val MAX_PUNCTUATION_SCAN_DEPTH = 20
 
-    private val BASE_BRACKETS = mapOf(
-        '(' to ')', '[' to ']', '{' to '}', '<' to '>',
-        '«' to '»', '“' to '”', '‘' to '’',
-        '‹' to '›', '「' to '」', '『' to '』',
-        '【' to '】', '〔' to '〕', '〖' to '〗', '《' to '》',
-        '〈' to '〉', '〘' to '〙', '〚' to '〛', '⟦' to '⟧',
-        '⟨' to '⟩', '⟪' to '⟫', '⟬' to '⟭', '⟮' to '⟯',
-        '⦃' to '⦄', '⦅' to '⦆', '⸢' to '⸣', '⸤' to '⸥',
-        '〝' to '〞'
+    // تم وضع الشارحة هنا لتكون صاحبة الأولوية القصوى
+    private val DASHES = setOf('-', '—', '–', '‐', '‒', '¬')
+
+    // قائمة النهايات السليمة الموسعة (علامات ترقيم، اقتباسات، ونهايات لغات أخرى)
+    private val EXTENDED_TERMINALS = setOf(
+        '؟', '?', '!', '.', '،', ',', ':', ';', '؛',
+        '”', '’', '»', '›', '〞', '〟', '"', '\'',
+        '！', '？', '。', '、', '।', '॥', '։'
     )
 
+    // تم تنظيفها من كافة علامات الاقتباس
+    private val BASE_BRACKETS = mapOf(
+        '(' to ')', '[' to ']', '{' to '}', '<' to '>',
+        '「' to '」', '『' to '』', '【' to '】', '〔' to '〕', '〖' to '〗', '《' to '》',
+        '〈' to '〉', '〘' to '〙', '〚' to '〛', '⟦' to '⟧', '⟨' to '⟩', '⟪' to '⟫', '⟬' to '⟭', '⟮' to '⟯',
+        '⦃' to '⦄', '⦅' to '⦆', '⸢' to '⸣', '⸤' to '⸥'
+    )
+
+    // تم تنظيفها من كافة علامات الاقتباس
     private val SYMMETRICAL_SYMBOLS = setOf(
-        '"', '\'', '＂', '＇', '′', '″', '‵', '‶',
         '♪', '♫', '♬', '♩', '*', '_', '|', '~', '^', '`',
         '#', '=', '+', '%', '•', '°'
     )
-
-    private val TERMINAL_PUNCTUATION = setOf('؟', '?', '!', '.', '،', ',', ':', ';', '؛')
-    private val DASHES = setOf('-', '—', '–', '‐', '‒', '¬')
 
     private fun getMatchingSymbol(c: Char): Char {
         BASE_BRACKETS[c]?.let { return it }
@@ -43,8 +47,8 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
-        return BASE_BRACKETS.containsKey(c) || BASE_BRACKETS.containsValue(c) ||
-               c in SYMMETRICAL_SYMBOLS || c in TERMINAL_PUNCTUATION || c in DASHES
+        // فحص الشارحة أولاً كصاحبة أسبقية، ثم النهايات السليمة، ثم الأقواس
+        return c in DASHES || c in EXTENDED_TERMINALS || BASE_BRACKETS.containsKey(c) || BASE_BRACKETS.containsValue(c) || c in SYMMETRICAL_SYMBOLS
     }
 
     private fun isUnbalancedInLine(c: Char, line: CharSequence): Boolean {
@@ -96,7 +100,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         if (hasArabic) {
             val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
-            val fixed = if (isMessy) applyVisualSwapping(text) else wrapArabicLines(text)
+            val fixed = if (isMessy) applyDirectionalWrapping(text) else wrapArabicLines(text)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -168,8 +172,6 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun hasMessyLeadingBoundary(line: CharSequence): Boolean {
         var start = 0
-        var isMessy = false
-        
         while (start < line.length && start < MAX_PUNCTUATION_SCAN_DEPTH) {
             val c = line[start]
             if (c.isWhitespace()) {
@@ -179,24 +181,18 @@ internal object AndroidPlayerSubtitleRtlFix {
             if (!isBoundaryPunctuation(c)) break
 
             if (c == '…' || (c == '.' && start + 2 < line.length && line[start+1] == '.' && line[start+2] == '.')) {
-                isMessy = true
-            } else if (c in TERMINAL_PUNCTUATION) {
-                isMessy = true
-            } else if (BASE_BRACKETS.containsValue(c)) { 
-                isMessy = true 
-            } else if (isUnbalancedInLine(c, line)) {
-                isMessy = true
+                return true
+            } else if (c in DASHES || c in EXTENDED_TERMINALS || BASE_BRACKETS.containsValue(c) || BASE_BRACKETS.containsKey(c) || isUnbalancedInLine(c, line)) {
+                return true
             }
             start++
         }
-        return isMessy
+        return false
     }
 
     private fun hasMessyTrailingBoundary(line: CharSequence): Boolean {
         var end = line.length
         var depth = 0
-        var isMessy = false
-        
         while (end > 0 && depth < MAX_PUNCTUATION_SCAN_DEPTH) {
             val c = line[end - 1]
             if (c.isWhitespace()) {
@@ -206,20 +202,17 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             if (!isBoundaryPunctuation(c)) break
 
-            if (c in DASHES) {
-                isMessy = true 
-            } else if (BASE_BRACKETS.containsKey(c)) { 
-                isMessy = true 
-            } else if (isUnbalancedInLine(c, line)) {
-                isMessy = true
+            if (c in DASHES || c in EXTENDED_TERMINALS || BASE_BRACKETS.containsKey(c) || isUnbalancedInLine(c, line)) {
+                return true
             }
             end--
             depth++
         }
-        return isMessy
+        return false
     }
 
-    private fun applyVisualSwapping(text: CharSequence): CharSequence {
+    // تم تغيير اسم الدالة وآليتها لتعكس عملية التغليف الاتجاهي الخالص بدون تبديل
+    private fun applyDirectionalWrapping(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(text.length + 16)
@@ -241,6 +234,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
 
+            // فحص واستخراج الرموز من بداية السطر
             var start = 0
             while (start < cleanCore.length && start < MAX_PUNCTUATION_SCAN_DEPTH) {
                 val c = cleanCore[start]
@@ -248,6 +242,7 @@ internal object AndroidPlayerSubtitleRtlFix {
                 else break
             }
 
+            // فحص واستخراج الرموز من نهاية السطر
             var end = cleanCore.length
             var depth = 0
             while (end > start && depth < MAX_PUNCTUATION_SCAN_DEPTH) {
@@ -258,70 +253,15 @@ internal object AndroidPlayerSubtitleRtlFix {
                 } else break
             }
 
-            var extractedDashChar: Char? = null
-            val misplacedStart = java.lang.StringBuilder()
-            for (j in 0 until start) {
-                val c = cleanCore[j]
-                if (c in DASHES && extractedDashChar == null) {
-                    extractedDashChar = c
-                } else if (!c.isWhitespace()) {
-                    misplacedStart.append(c)
-                }
-            }
-
-            val misplacedEnd = java.lang.StringBuilder()
-            for (j in end until cleanCore.length) {
-                val c = cleanCore[j]
-                if (c in DASHES && extractedDashChar == null) {
-                    extractedDashChar = c
-                } else if (!c.isWhitespace()) {
-                    misplacedEnd.append(c)
-                }
-            }
-
-            val terminals = java.lang.StringBuilder()
-            val cleanEnd = java.lang.StringBuilder()
-            for (j in misplacedEnd.indices) {
-                val c = misplacedEnd[j]
-                if (c in TERMINAL_PUNCTUATION) {
-                    terminals.append(c)
-                } else {
-                    cleanEnd.append(c)
-                }
-            }
-
-            val cleanStart = java.lang.StringBuilder()
-            for (j in misplacedStart.indices) {
-                val c = misplacedStart[j]
-                if (c in TERMINAL_PUNCTUATION) {
-                    terminals.append(c)
-                } else {
-                    cleanStart.append(c)
-                }
-            }
-
-            val reversedEnd = java.lang.StringBuilder()
-            for (j in cleanEnd.indices.reversed()) {
-                reversedEnd.append(mirrorArabicPunctuation(cleanEnd[j]))
-            }
-
-            val reversedStart = java.lang.StringBuilder()
-            for (j in cleanStart.indices.reversed()) {
-                reversedStart.append(mirrorArabicPunctuation(cleanStart[j]))
-            }
-
+            val startSymbols = cleanCore.subSequence(0, start)
             val middleText = cleanCore.subSequence(start, end)
+            val endSymbols = cleanCore.subSequence(end, cleanCore.length)
 
+            // إعادة التجميع بالترتيب المنطقي الأصلي داخل غلاف التوجيه الاتجاهي
             builder.append('\u202B')
-            if (extractedDashChar != null) {
-                builder.append(extractedDashChar)
-            }
-            if (terminals.isNotEmpty()) {
-                builder.append(terminals)
-            }
-            builder.append(reversedEnd)
+            builder.append(startSymbols) // مثل الشارحة أو الأقواس البدائية
             builder.append(pinInteriorNeutralMarks(middleText))
-            builder.append(reversedStart)
+            builder.append(endSymbols) // مثل علامات الترقيم والاقتباس الختامية
             builder.append('\u202C')
 
             if (hasCr) builder.append('\r')
@@ -369,8 +309,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
         return false
     }
-
-    private fun mirrorArabicPunctuation(c: Char): Char = BASE_BRACKETS[c] ?: getMatchingSymbol(c)
 
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
