@@ -12,15 +12,9 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     private const val DEFAULT_CUE_DURATION_US = 5_000_000L
-    private const val MAX_PUNCTUATION_SCAN_DEPTH = 20
 
-    private val DASHES = setOf('-', '—', '–', '‐', '‒', '¬')
-
-    private val EXTENDED_TERMINALS = setOf(
-        '؟', '?', '!', '.', '،', ',', ':', ';', '؛',
-        '”', '’', '»', '›', '〞', '〟', '"', '\'',
-        '！', '？', '。', '、', '।', '॥', '։'
-    )
+    // قائمة علامات الترقيم التي يجب نقلها إذا ظهرت في بداية السطر
+    private val LEADING_PUNCTUATION_TO_MOVE = setOf('.', '!', '؟', '?')
 
     private val BASE_BRACKETS = mapOf(
         '(' to ')', '[' to ']', '{' to '}', '<' to '>',
@@ -29,45 +23,12 @@ internal object AndroidPlayerSubtitleRtlFix {
         '⦃' to '⦄', '⦅' to '⦆', '⸢' to '⸣', '⸤' to '⸥'
     )
 
-    private val SYMMETRICAL_SYMBOLS = setOf(
-        '♪', '♫', '♬', '♩', '*', '_', '|', '~', '^', '`',
-        '#', '=', '+', '%', '•', '°'
-    )
-
     private fun getMatchingSymbol(c: Char): Char {
         BASE_BRACKETS[c]?.let { return it }
         for ((open, close) in BASE_BRACKETS) {
             if (close == c) return open
         }
         return c
-    }
-
-    private fun isBoundaryPunctuation(c: Char): Boolean {
-        return c in DASHES || c in EXTENDED_TERMINALS || BASE_BRACKETS.containsKey(c) || BASE_BRACKETS.containsValue(c) || c in SYMMETRICAL_SYMBOLS
-    }
-
-    private fun isUnbalancedInLine(c: Char, line: CharSequence): Boolean {
-        if (c in SYMMETRICAL_SYMBOLS) {
-            var count = 0
-            for (i in line.indices) {
-                if (line[i] == c) count++
-            }
-            return count % 2 != 0
-        }
-
-        if (BASE_BRACKETS.containsKey(c) || BASE_BRACKETS.containsValue(c)) {
-            val open = if (BASE_BRACKETS.containsKey(c)) c else getMatchingSymbol(c)
-            val close = BASE_BRACKETS[open] ?: return false
-            var openCount = 0
-            var closeCount = 0
-            for (i in line.indices) {
-                if (line[i] == open) openCount++
-                else if (line[i] == close) closeCount++
-            }
-            return openCount != closeCount
-        }
-
-        return false
     }
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
@@ -94,8 +55,10 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (!hasRtl) return cue
 
         if (hasArabic) {
-            val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
-            val fixed = if (isMessy) applySmartDirectionalWrapping(text) else wrapArabicLines(text)
+            // المرحلة الأولى: المعالجة المسبقة للأخطاء الهيكلية
+            val preProcessed = applyStageOnePreProcessing(text)
+            // المرحلة الثانية: التغليف الاتجاهي الخالص
+            val fixed = applyStageTwoWrapping(preProcessed)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -152,116 +115,114 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
-        if (isBuiltInSubtitle) return false
-        val lines = text.splitByNewlines()
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-            if (hasMessyLeadingBoundary(trimmed) || hasMessyTrailingBoundary(trimmed)) {
-                return true
-            }
-        }
-        return false
+    // =========================================
+    // المرحلة الأولى: المعالجة المسبقة
+    // =========================================
+    private fun applyStageOnePreProcessing(text: CharSequence): CharSequence {
+        var current = fixStraightQuoteVisualHack(text)
+        current = fixLeadingPunctuation(current)
+        return current
     }
 
-    private fun hasMessyLeadingBoundary(line: CharSequence): Boolean {
-        var start = 0
-        while (start < line.length && start < MAX_PUNCTUATION_SCAN_DEPTH) {
-            val c = line[start]
-            if (c.isWhitespace()) {
-                start++
-                continue
-            }
-            if (!isBoundaryPunctuation(c)) break
-
-            if (c == '…' || (c == '.' && start + 2 < line.length && line[start+1] == '.' && line[start+2] == '.')) {
-                return true
-            } else if (c in DASHES || c in EXTENDED_TERMINALS || BASE_BRACKETS.containsValue(c) || BASE_BRACKETS.containsKey(c) || isUnbalancedInLine(c, line)) {
-                return true
-            }
-            start++
-        }
-        return false
-    }
-
-    private fun hasMessyTrailingBoundary(line: CharSequence): Boolean {
-        var end = line.length
-        var depth = 0
-        while (end > 0 && depth < MAX_PUNCTUATION_SCAN_DEPTH) {
-            val c = line[end - 1]
-            if (c.isWhitespace()) {
-                end--
-                depth++
-                continue
-            }
-            if (!isBoundaryPunctuation(c)) break
-
-            if (c in DASHES || c in EXTENDED_TERMINALS || BASE_BRACKETS.containsKey(c) || isUnbalancedInLine(c, line)) {
-                return true
-            }
-            end--
-            depth++
-        }
-        return false
-    }
-
-    private fun fixStraightQuoteVisualHack(line: CharSequence): CharSequence {
+    // مكتشف خدعة الأقواس البصرية (حالة كيلوا وجون)
+    private fun fixStraightQuoteVisualHack(text: CharSequence): CharSequence {
         var quoteCount = 0
-        var quoteIndex = -1
-        for (i in line.indices) {
-            if (line[i] == '"') {
+        var firstQuoteIdx = -1
+        var secondQuoteIdx = -1
+        for (i in text.indices) {
+            if (text[i] == '"') {
                 quoteCount++
-                quoteIndex = i
+                if (firstQuoteIdx == -1) firstQuoteIdx = i else secondQuoteIdx = i
             }
         }
-        
-        if (quoteCount != 1) return line
+        // لا تتدخل إلا إذا كان النص يحتوي على قوسين مستقيمين فقط
+        if (quoteCount != 2) return text
 
-        var isAtStart = true
-        for (i in 0 until quoteIndex) {
-            val c = line[i]
-            if (!c.isWhitespace() && c !in DASHES) {
-                isAtStart = false
+        // فحص ما إذا كان القوسان يحيطان بفاصل الأسطر (مع احتمال وجود مسافات)
+        var isValidHack = true
+        var foundNewline = false
+        for (i in firstQuoteIdx + 1 until secondQuoteIdx) {
+            val c = text[i]
+            if (c == '\n') foundNewline = true
+            else if (!c.isWhitespace()) {
+                isValidHack = false
                 break
             }
         }
 
-        if (isAtStart) {
-            val sb = if (line is Spanned) SpannableStringBuilder(line) else java.lang.StringBuilder(line)
-            sb.delete(quoteIndex, quoteIndex + 1)
-            var insertPos = sb.length
-            while (insertPos > 0 && (sb[insertPos - 1].isWhitespace() || sb[insertPos - 1] in DASHES)) {
-                insertPos--
-            }
-            sb.insert(insertPos, "\"")
+        if (isValidHack && foundNewline) {
+            val sb = if (text is Spanned) SpannableStringBuilder(text) else java.lang.StringBuilder(text)
+            // الحذف يتم من النهاية للبداية للحفاظ على دقة الـ Index
+            sb.delete(secondQuoteIdx, secondQuoteIdx + 1)
+            sb.delete(firstQuoteIdx, firstQuoteIdx + 1)
+
+            // سحب الأقواس للأطراف الخارجية المطلقة للنص
+            sb.insert(0, "\"")
+            sb.insert(sb.length, "\"")
             return sb
         }
-
-        var isAtEnd = true
-        for (i in quoteIndex + 1 until line.length) {
-            val c = line[i]
-            if (!c.isWhitespace() && c !in DASHES) {
-                isAtEnd = false
-                break
-            }
-        }
-
-        if (isAtEnd) {
-            val sb = if (line is Spanned) SpannableStringBuilder(line) else java.lang.StringBuilder(line)
-            sb.delete(quoteIndex, quoteIndex + 1)
-            var insertPos = 0
-            while (insertPos < sb.length && (sb[insertPos].isWhitespace() || sb[insertPos] in DASHES)) {
-                insertPos++
-            }
-            sb.insert(insertPos, "\"")
-            return sb
-        }
-
-        return line
+        return text
     }
 
-    private fun applySmartDirectionalWrapping(text: CharSequence): CharSequence {
+    // مصحح علامات الترقيم الختامية في بداية السطر (نقلها للنهاية)
+    private fun fixLeadingPunctuation(text: CharSequence): CharSequence {
+        val lines = text.splitByNewlines()
+        var changed = false
+        val sb = if (text is Spanned) SpannableStringBuilder() else java.lang.StringBuilder()
+        
+        for (i in lines.indices) {
+            if (i > 0) sb.append('\n')
+            val line = lines[i]
+            val hasCr = line.isNotEmpty() && line.last() == '\r'
+            val cleanLine = if (hasCr) line.subSequence(0, line.length - 1) else line
+            
+            if (cleanLine.isNotEmpty()) {
+                var startIdx = 0
+                while (startIdx < cleanLine.length && cleanLine[startIdx].isWhitespace()) {
+                    startIdx++
+                }
+                
+                if (startIdx < cleanLine.length) {
+                    val firstChar = cleanLine[startIdx]
+                    
+                    // استثناء النقاط الثلاث (...) من أي نقل
+                    var isThreeDots = false
+                    if (firstChar == '.') {
+                        var dotCount = 0
+                        var tempIdx = startIdx
+                        while (tempIdx < cleanLine.length && cleanLine[tempIdx] == '.') {
+                            dotCount++
+                            tempIdx++
+                        }
+                        if (dotCount >= 2) {
+                            isThreeDots = true
+                        }
+                    }
+                    
+                    // إذا كانت علامة ترقيم ختامية وليست 3 نقاط، انقلها للنهاية
+                    if (!isThreeDots && firstChar in LEADING_PUNCTUATION_TO_MOVE) {
+                        val lineSb = if (cleanLine is Spanned) SpannableStringBuilder(cleanLine) else java.lang.StringBuilder(cleanLine)
+                        lineSb.delete(startIdx, startIdx + 1)
+                        lineSb.append(firstChar)
+                        sb.append(lineSb)
+                        changed = true
+                    } else {
+                        sb.append(cleanLine)
+                    }
+                } else {
+                    sb.append(cleanLine)
+                }
+            }
+            
+            if (hasCr) sb.append('\r')
+        }
+        return if (changed) sb else text
+    }
+
+    // =========================================
+    // المرحلة الثانية: التغليف الاتجاهي (الدرع)
+    // =========================================
+    private fun applyStageTwoWrapping(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(text.length + 16)
@@ -283,40 +244,14 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
 
-            val fixedCore = fixStraightQuoteVisualHack(cleanCore)
-            val pinnedCore = pinInteriorNeutralMarks(fixedCore)
-
-            builder.append('\u200F')
+            // تغليف السطر النظيف بـ RLE (\u202B) و PDF (\u202C) فقط
             builder.append('\u202B')
-            builder.append(pinnedCore)
+            builder.append(cleanCore)
             builder.append('\u202C')
-            builder.append('\u200F')
 
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
-    }
-
-    private fun pinInteriorNeutralMarks(text: CharSequence): CharSequence {
-        var found = false
-        for (i in text.indices) {
-            if (isBoundaryPunctuation(text[i])) {
-                found = true
-                break
-            }
-        }
-        if (!found) return text
-
-        val sb = if (text is Spanned) SpannableStringBuilder(text) else java.lang.StringBuilder(text)
-        var i = sb.length - 1
-        while (i >= 0) {
-            if (isBoundaryPunctuation(sb[i])) {
-                sb.insert(i + 1, "\u200F")
-                sb.insert(i, "\u200F")
-            }
-            i--
-        }
-        return sb
     }
 
     private fun containsArabic(text: CharSequence): Boolean {
@@ -337,32 +272,43 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    private fun wrapArabicLines(text: CharSequence): CharSequence {
-        val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(text.length + 8)
-        val lines = text.splitByNewlines()
-        for (i in lines.indices) {
-            if (i > 0) builder.append('\n')
-            val line = lines[i].stripDirectionalWrap()
-            if (line.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-            val hasCr = line.isNotEmpty() && line.last() == '\r'
-            val core = if (hasCr) line.subSequence(0, line.length - 1) else line
-            if (core.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-
-            val pinnedCore = pinInteriorNeutralMarks(core)
-            builder.append('\u200F').append('\u202B').append(pinnedCore).append('\u202C').append('\u200F')
-
-            if (hasCr) builder.append('\r')
+    private fun CharSequence.stripDirectionalWrap(): CharSequence {
+        val hasMarker = (0 until length).any { isDirectionalMark(this[it]) }
+        if (!hasMarker) return this
+        if (this !is Spanned) {
+            val sb = java.lang.StringBuilder(length)
+            for (ch in this) if (!isDirectionalMark(ch)) sb.append(ch)
+            return sb.toString()
         }
-        return finishBuilder(builder)
+        val sb = SpannableStringBuilder(this)
+        var k = 0
+        while (k < sb.length) {
+            if (isDirectionalMark(sb[k])) sb.delete(k, k + 1) else k++
+        }
+        return sb
     }
 
+    private fun isDirectionalMark(c: Char): Boolean =
+        c == '\u202A' || c == '\u202B' || c == '\u202C' || c == '\u200E' || c == '\u200F'
+
+    private fun CharSequence.splitByNewlines(): List<CharSequence> {
+        val result = mutableListOf<CharSequence>()
+        var start = 0
+        var i = 0
+        while (i < this.length) {
+            if (this[i] == '\n') {
+                result.add(this.subSequence(start, i))
+                start = i + 1
+            }
+            i++
+        }
+        result.add(this.subSequence(start, this.length))
+        return result
+    }
+
+    // =========================================
+    // دوال الدعم العبري (لم يتم المساس بها)
+    // =========================================
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else java.lang.StringBuilder(text.length)
@@ -459,40 +405,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         out.append(line.subSequence(end, end0)).append(line.subSequence(0, end))
         if (hasCr) out.append('\r')
         return finishBuilder(out)
-    }
-
-    private fun CharSequence.stripDirectionalWrap(): CharSequence {
-        val hasMarker = (0 until length).any { isDirectionalMark(this[it]) }
-        if (!hasMarker) return this
-        if (this !is Spanned) {
-            val sb = java.lang.StringBuilder(length)
-            for (ch in this) if (!isDirectionalMark(ch)) sb.append(ch)
-            return sb.toString()
-        }
-        val sb = SpannableStringBuilder(this)
-        var k = 0
-        while (k < sb.length) {
-            if (isDirectionalMark(sb[k])) sb.delete(k, k + 1) else k++
-        }
-        return sb
-    }
-
-    private fun isDirectionalMark(c: Char): Boolean =
-        c == '\u202A' || c == '\u202B' || c == '\u202C' || c == '\u200E' || c == '\u200F'
-
-    private fun CharSequence.splitByNewlines(): List<CharSequence> {
-        val result = mutableListOf<CharSequence>()
-        var start = 0
-        var i = 0
-        while (i < this.length) {
-            if (this[i] == '\n') {
-                result.add(this.subSequence(start, i))
-                start = i + 1
-            }
-            i++
-        }
-        result.add(this.subSequence(start, this.length))
-        return result
     }
 
     private fun isRtlPunctuation(ch: Char, isEnd: Boolean): Boolean {
