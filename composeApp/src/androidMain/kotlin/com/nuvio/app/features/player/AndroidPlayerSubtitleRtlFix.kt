@@ -13,14 +13,28 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private const val DEFAULT_CUE_DURATION_US = 5_000_000L
 
-    // قائمة علامات الترقيم التي يجب نقلها إذا ظهرت في بداية السطر
-    private val LEADING_PUNCTUATION_TO_MOVE = setOf('.', '!', '؟', '?')
+    // الشارحات بأنواعها (لضمان التعرف عليها وتخطيها حسب الطلب)
+    private val DASHES = setOf('-', '—', '–', '‐', '‒', '¬')
 
+    // النهايات السليمة وعلامات الترقيم الموسعة
+    private val EXTENDED_TERMINALS = setOf(
+        '؟', '?', '!', '.', '،', ',', ':', ';', '؛',
+        '”', '’', '»', '›', '〞', '〟', '"', '\'',
+        '！', '？', '。', '、', '।', '॥', '։'
+    )
+
+    // الأقواس الأساسية لفحص التوازن
     private val BASE_BRACKETS = mapOf(
         '(' to ')', '[' to ']', '{' to '}', '<' to '>',
         '「' to '」', '『' to '』', '【' to '】', '〔' to '〕', '〖' to '〗', '《' to '》',
         '〈' to '〉', '〘' to '〙', '〚' to '〛', '⟦' to '⟧', '⟨' to '⟩', '⟪' to '⟫', '⟬' to '⟭', '⟮' to '⟯',
         '⦃' to '⦄', '⦅' to '⦆', '⸢' to '⸣', '⸤' to '⸥'
+    )
+
+    // الرموز المتناظرة لفحص التوازن
+    private val SYMMETRICAL_SYMBOLS = setOf(
+        '♪', '♫', '♬', '♩', '*', '_', '|', '~', '^', '`',
+        '#', '=', '+', '%', '•', '°'
     )
 
     private fun getMatchingSymbol(c: Char): Char {
@@ -29,6 +43,31 @@ internal object AndroidPlayerSubtitleRtlFix {
             if (close == c) return open
         }
         return c
+    }
+
+    // الدالة العائدة: فحص توازن الأقواس والرموز في نفس السطر
+    private fun isUnbalancedInLine(c: Char, line: CharSequence): Boolean {
+        if (c in SYMMETRICAL_SYMBOLS) {
+            var count = 0
+            for (i in line.indices) {
+                if (line[i] == c) count++
+            }
+            return count % 2 != 0
+        }
+
+        if (BASE_BRACKETS.containsKey(c) || BASE_BRACKETS.containsValue(c)) {
+            val open = if (BASE_BRACKETS.containsKey(c)) c else getMatchingSymbol(c)
+            val close = BASE_BRACKETS[open] ?: return false
+            var openCount = 0
+            var closeCount = 0
+            for (i in line.indices) {
+                if (line[i] == open) openCount++
+                else if (line[i] == close) closeCount++
+            }
+            return openCount != closeCount
+        }
+
+        return false
     }
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
@@ -55,9 +94,9 @@ internal object AndroidPlayerSubtitleRtlFix {
         if (!hasRtl) return cue
 
         if (hasArabic) {
-            // المرحلة الأولى: المعالجة المسبقة للأخطاء الهيكلية
+            // المرحلة الأولى: المعالجة الهيكلية الذكية (مع كافة القواعد)
             val preProcessed = applyStageOnePreProcessing(text)
-            // المرحلة الثانية: التغليف الاتجاهي الخالص
+            // المرحلة الثانية: درع التغليف الاتجاهي
             val fixed = applyStageTwoWrapping(preProcessed)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
@@ -116,15 +155,15 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     // =========================================
-    // المرحلة الأولى: المعالجة المسبقة
+    // المرحلة الأولى: المعالجة المسبقة (القوة الكاملة)
     // =========================================
     private fun applyStageOnePreProcessing(text: CharSequence): CharSequence {
         var current = fixStraightQuoteVisualHack(text)
-        current = fixLeadingPunctuation(current)
+        current = fixLeadingTerminalsWithFullContext(current)
         return current
     }
 
-    // مكتشف خدعة الأقواس البصرية (حالة كيلوا وجون)
+    // 1. مكتشف الخدعة البصرية للأقواس المستقيمة (حالة كيلوا)
     private fun fixStraightQuoteVisualHack(text: CharSequence): CharSequence {
         var quoteCount = 0
         var firstQuoteIdx = -1
@@ -135,10 +174,9 @@ internal object AndroidPlayerSubtitleRtlFix {
                 if (firstQuoteIdx == -1) firstQuoteIdx = i else secondQuoteIdx = i
             }
         }
-        // لا تتدخل إلا إذا كان النص يحتوي على قوسين مستقيمين فقط
+        
         if (quoteCount != 2) return text
 
-        // فحص ما إذا كان القوسان يحيطان بفاصل الأسطر (مع احتمال وجود مسافات)
         var isValidHack = true
         var foundNewline = false
         for (i in firstQuoteIdx + 1 until secondQuoteIdx) {
@@ -152,11 +190,8 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         if (isValidHack && foundNewline) {
             val sb = if (text is Spanned) SpannableStringBuilder(text) else java.lang.StringBuilder(text)
-            // الحذف يتم من النهاية للبداية للحفاظ على دقة الـ Index
             sb.delete(secondQuoteIdx, secondQuoteIdx + 1)
             sb.delete(firstQuoteIdx, firstQuoteIdx + 1)
-
-            // سحب الأقواس للأطراف الخارجية المطلقة للنص
             sb.insert(0, "\"")
             sb.insert(sb.length, "\"")
             return sb
@@ -164,8 +199,8 @@ internal object AndroidPlayerSubtitleRtlFix {
         return text
     }
 
-    // مصحح علامات الترقيم الختامية في بداية السطر (نقلها للنهاية)
-    private fun fixLeadingPunctuation(text: CharSequence): CharSequence {
+    // 2. مصحح البدايات الشامل (مع احترام الأقواس المتوازنة والثلاث نقاط والشارحة)
+    private fun fixLeadingTerminalsWithFullContext(text: CharSequence): CharSequence {
         val lines = text.splitByNewlines()
         var changed = false
         val sb = if (text is Spanned) SpannableStringBuilder() else java.lang.StringBuilder()
@@ -185,7 +220,14 @@ internal object AndroidPlayerSubtitleRtlFix {
                 if (startIdx < cleanLine.length) {
                     val firstChar = cleanLine[startIdx]
                     
-                    // استثناء النقاط الثلاث (...) من أي نقل
+                    // استثناء الشارحة (-) فوراً
+                    if (firstChar in DASHES) {
+                        sb.append(cleanLine)
+                        if (hasCr) sb.append('\r')
+                        continue
+                    }
+
+                    // استثناء الثلاث نقاط (...)
                     var isThreeDots = false
                     if (firstChar == '.') {
                         var dotCount = 0
@@ -194,18 +236,28 @@ internal object AndroidPlayerSubtitleRtlFix {
                             dotCount++
                             tempIdx++
                         }
-                        if (dotCount >= 2) {
-                            isThreeDots = true
-                        }
+                        if (dotCount >= 2) isThreeDots = true
                     }
-                    
-                    // إذا كانت علامة ترقيم ختامية وليست 3 نقاط، انقلها للنهاية
-                    if (!isThreeDots && firstChar in LEADING_PUNCTUATION_TO_MOVE) {
-                        val lineSb = if (cleanLine is Spanned) SpannableStringBuilder(cleanLine) else java.lang.StringBuilder(cleanLine)
-                        lineSb.delete(startIdx, startIdx + 1)
-                        lineSb.append(firstChar)
-                        sb.append(lineSb)
-                        changed = true
+
+                    // تطبيق القواعد الشاملة:
+                    // هل الرمز موجود في قائمة النهايات أو الأقواس؟
+                    val isTrackedSymbol = firstChar in EXTENDED_TERMINALS || BASE_BRACKETS.containsKey(firstChar) || BASE_BRACKETS.containsValue(firstChar) || firstChar in SYMMETRICAL_SYMBOLS
+
+                    if (!isThreeDots && isTrackedSymbol) {
+                        // هنا نستخدم الدالة العائدة للتحقق: هل هو متوازن في السطر؟
+                        val isUnbalanced = isUnbalancedInLine(firstChar, cleanLine)
+                        
+                        // ننقل الرمز فقط إذا كان غير متوازن (مثل نقطة مفردة أو قوس يتيم)
+                        if (isUnbalanced || firstChar in EXTENDED_TERMINALS) {
+                            val lineSb = if (cleanLine is Spanned) SpannableStringBuilder(cleanLine) else java.lang.StringBuilder(cleanLine)
+                            lineSb.delete(startIdx, startIdx + 1)
+                            lineSb.append(firstChar) // نقله للنهاية
+                            sb.append(lineSb)
+                            changed = true
+                        } else {
+                            // إذا كان متوازناً (له نظير في السطر)، اتركه في حاله
+                            sb.append(cleanLine)
+                        }
                     } else {
                         sb.append(cleanLine)
                     }
@@ -213,14 +265,13 @@ internal object AndroidPlayerSubtitleRtlFix {
                     sb.append(cleanLine)
                 }
             }
-            
             if (hasCr) sb.append('\r')
         }
         return if (changed) sb else text
     }
 
     // =========================================
-    // المرحلة الثانية: التغليف الاتجاهي (الدرع)
+    // المرحلة الثانية: درع التغليف الاتجاهي
     // =========================================
     private fun applyStageTwoWrapping(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
@@ -244,7 +295,6 @@ internal object AndroidPlayerSubtitleRtlFix {
                 continue
             }
 
-            // تغليف السطر النظيف بـ RLE (\u202B) و PDF (\u202C) فقط
             builder.append('\u202B')
             builder.append(cleanCore)
             builder.append('\u202C')
@@ -307,7 +357,7 @@ internal object AndroidPlayerSubtitleRtlFix {
     }
 
     // =========================================
-    // دوال الدعم العبري (لم يتم المساس بها)
+    // دوال الدعم العبري
     // =========================================
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
