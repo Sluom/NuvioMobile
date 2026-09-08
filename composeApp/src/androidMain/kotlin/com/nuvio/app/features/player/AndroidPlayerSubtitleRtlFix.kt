@@ -116,6 +116,18 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun isBoundaryPunctuation(c: Char): Boolean {
         if (c.isLetterOrDigit()) return false
+        // Arabic tashkeel (shadda, fatha, kasra, damma, tanwin, sukun, etc.)
+        // are zero-width Unicode combining marks that must stay directly
+        // glued to the base letter they modify — no character, not even an
+        // invisible one, can sit between them and their letter without
+        // breaking the text shaper's ability to attach them. They aren't
+        // letters or digits either, so without this check they fell through
+        // and were treated as "boundary punctuation" — meaning
+        // pinInteriorNeutralMarks() below inserted a \u200F mark between a
+        // letter and its own diacritic. That's exactly what turned the
+        // shadda in "التقصّي" and "فإنّه" into a detached, floating glyph
+        // instead of sitting on its letter.
+        if (Character.getType(c.code) == Character.NON_SPACING_MARK.toInt()) return false
         return true
     }
 
@@ -214,6 +226,14 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         if (!isBoundaryPunctuation(firstChar)) return false
 
+        // A straight quote at a line's very start is extremely common when
+        // a quoted sentence spans two lines (opens on this line, closes on
+        // the next). Its partner then genuinely isn't on this line, and
+        // treating that as "messy" is exactly what was dragging otherwise
+        // perfectly fine lines (e.g. the كيلوا/جون example) into the
+        // aggressive reordering path. Leaving it in place is always safe.
+        if (firstChar == '"') return false
+
         if (firstChar == '؟' || firstChar == '?' || firstChar == '!' || firstChar == '.' ||
             firstChar == '،' || firstChar == ',' || firstChar == ':' || firstChar == '؛' || firstChar == ';') {
             return true
@@ -265,7 +285,14 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val matchChar = getMatchingSymbol(lastChar)
         var foundAttachedMatch = false
-        for (i in 0 until end - 1) {
+        // Search from the char nearest the boundary outward (backwards),
+        // not forwards from the start of the line. A line can contain more
+        // than one bracket pair (e.g. "...(كيلوا)...(جون)"); scanning
+        // forward finds whichever pair comes first in the line, not the one
+        // actually closest to — and therefore actually paired with — this
+        // boundary symbol, which misjudges which bracket is genuinely
+        // orphaned.
+        for (i in (end - 2) downTo 0) {
             if (line[i] == matchChar) {
                 val mNotFollowedBySpace = i + 1 < line.length && !line[i + 1].isWhitespace()
                 val cNotPrecededBySpace = end - 2 >= 0 && !line[end - 2].isWhitespace()
@@ -351,7 +378,9 @@ internal object AndroidPlayerSubtitleRtlFix {
                 if (!c.isWhitespace()) {
                     val m = getMatchingSymbol(c)
                     var isAttachedPair = false
-                    for (j in preserveStart until end - 1) {
+                    // Nearest-outward search — see the identical fix and
+                    // comment in hasMessyTrailingBoundary.
+                    for (j in (end - 2) downTo preserveStart) {
                         if (cleanCore[j] == m) {
                             val mNotFollowedBySpace = j + 1 < cleanCore.length && !cleanCore[j + 1].isWhitespace()
                             val cNotPrecededBySpace = end - 2 >= 0 && !cleanCore[end - 2].isWhitespace()
@@ -397,7 +426,16 @@ internal object AndroidPlayerSubtitleRtlFix {
         var found = false
         for (i in text.indices) {
             val ch = text[i]
-            if (isBoundaryPunctuation(ch)) {
+            // Actual bracket/quote characters (anything in OPEN_TO_CLOSE or
+            // CLOSE_TO_OPEN) are skipped here on purpose. Android's own bidi
+            // engine already mirrors and positions matched bracket pairs
+            // correctly inside RTL text on its own (Unicode's bracket-pairing
+            // rule, UAX#9 N0) — wrapping them in extra \u200F marks doesn't
+            // help them, it *fights* that built-in resolution, which is what
+            // was turning already-correct pairs like "(بيتو)" into scrambled
+            // output. Only genuinely non-bracket neutral punctuation (commas,
+            // colons, etc.) needs the manual pinning below.
+            if (isBoundaryPunctuation(ch) && !OPEN_TO_CLOSE.containsKey(ch) && !CLOSE_TO_OPEN.containsKey(ch)) {
                 found = true
                 break
             }
@@ -407,7 +445,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         val sb = StringBuilder(text.length + 16)
         for (i in text.indices) {
             val ch = text[i]
-            if (isBoundaryPunctuation(ch)) {
+            if (isBoundaryPunctuation(ch) && !OPEN_TO_CLOSE.containsKey(ch) && !CLOSE_TO_OPEN.containsKey(ch)) {
                 sb.append('\u200F').append(ch).append('\u200F')
             } else {
                 sb.append(ch)
