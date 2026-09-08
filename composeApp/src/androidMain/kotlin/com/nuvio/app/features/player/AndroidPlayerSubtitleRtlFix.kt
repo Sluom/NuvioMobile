@@ -57,10 +57,58 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private val SYMMETRICAL_SYMBOLS = setOf(
         '"', '\'', '＂', '＇', '′', '″', '‵', '‶',
-        '♪', '♫', '♬', '♩', '🎵', '🎶', '*', '_', '|', '~', '^', '`',
+        '♪', '♫', '♬', '♩', '*', '_', '|', '~', '^', '`',
         '#', '=', '+', '%', '•', '°', '؟', '?', '!', '.',
         '،', ',', ':', ';', '؛'
     )
+
+    // 🎵 and 🎶 are emoji made of a surrogate pair — they don't fit in a
+    // single Kotlin Char (that's the "too many characters in a character
+    // literal" build failure), so they need their own String-based set.
+    private val SYMMETRICAL_SYMBOL_STRINGS = setOf("🎵", "🎶")
+
+    // Song-lyric subtitle lines are conventionally wrapped in musical note
+    // marks (e.g. "♪ never gonna give you up ♪"). These are never a
+    // genuine bracket pair and are almost always separated from the lyric
+    // text by a space, so the normal "attached pair" heuristic below would
+    // wrongly call a perfectly normal lyric line "messy". They're checked
+    // by code point (not Char) because 🎵/🎶 are surrogate pairs.
+    private val MUSICAL_NOTE_CODEPOINTS = setOf(
+        '♪'.code, '♫'.code, '♬'.code, '♩'.code,
+        0x1F3B5, // 🎵
+        0x1F3B6  // 🎶
+    )
+
+    // Every line-ending punctuation mark this fix treats as definitively
+    // safe — i.e. a line ending in one of these is never sent through the
+    // boundary "messy" detector, so it's never a candidate for repositioning.
+    // Covers Latin/Arabic terminal punctuation plus the closing quote and
+    // guillemet marks (”, ’, », ›, 〞, 〟, straight " and ') that commonly end
+    // dialogue lines, and common terminal marks from other languages that
+    // appear in translated subtitle files (CJK, Hindi/Devanagari, Armenian).
+    private val SAFE_LINE_ENDINGS = setOf(
+        // Latin / Arabic terminal punctuation
+        '.', '!', '?', '؟', ',', '،', ':', ';', '؛', '…',
+        // Closing quotes and guillemets (safe: they close a quotation,
+        // they don't orphan-open one)
+        '"', '\'', '”', '’', '»', '›', '〞', '〟',
+        // CJK terminal punctuation
+        '。', '、', '！', '？',
+        // Hindi / Devanagari terminal punctuation
+        '।', '॥',
+        // Armenian full stop
+        '։'
+    )
+
+    private fun startsWithMusicalNote(line: CharSequence, at: Int): Boolean {
+        if (at >= line.length) return false
+        return Character.codePointAt(line, at) in MUSICAL_NOTE_CODEPOINTS
+    }
+
+    private fun endsWithMusicalNote(line: CharSequence, endExclusive: Int): Boolean {
+        if (endExclusive <= 0) return false
+        return Character.codePointBefore(line, endExclusive) in MUSICAL_NOTE_CODEPOINTS
+    }
 
     private fun getMatchingSymbol(c: Char): Char {
         return OPEN_TO_CLOSE[c] ?: CLOSE_TO_OPEN[c] ?: c
@@ -161,6 +209,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
         
         if (start >= line.length) return false
+        if (startsWithMusicalNote(line, start)) return false
         val firstChar = line[start]
 
         if (!isBoundaryPunctuation(firstChar)) return false
@@ -205,13 +254,10 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
         
         if (end <= 0) return false
+        if (endsWithMusicalNote(line, end)) return false
         val lastChar = line[end - 1]
 
-        val isEndingPunc = lastChar == '.' || lastChar == '؟' || lastChar == '?' ||
-                           lastChar == '!' || lastChar == '،' || lastChar == ',' ||
-                           lastChar == ':' || lastChar == '؛' || lastChar == ';' ||
-                           lastChar == '…'
-        if (isEndingPunc) return false
+        if (lastChar in SAFE_LINE_ENDINGS) return false
 
         if (OPEN_TO_CLOSE.containsKey(lastChar)) return true
 
@@ -327,10 +373,14 @@ internal object AndroidPlayerSubtitleRtlFix {
             val middleText = cleanCore.subSequence(start, end)
 
             builder.append('\u202B')
+            // structuralStart (leading dash/whitespace) is written first,
+            // unconditionally, so it always stays the line's first visible
+            // element — a relocated boundary symbol (misplacedEnd) is never
+            // allowed to be pushed ahead of it.
+            builder.append(structuralStart)
             for (j in misplacedEnd.indices.reversed()) {
                 builder.append(mirrorArabicPunctuation(misplacedEnd[j]))
             }
-            builder.append(structuralStart)
             builder.append(pinInteriorNeutralMarks(middleText))
             builder.append(structuralEnd)
             for (j in misplacedStart.indices.reversed()) {
