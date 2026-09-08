@@ -9,37 +9,15 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.CuesWithTiming
 
-internal object AndroidPlayerSubtitleRtlFix {
+internal object PlayerSubtitleRtlFix {
 
-    // Remembers whether the last cue *with an actual letter* in it was Arabic.
-    // Used to infer direction for symbol-only cues (e.g. "* * *" or "» «" scene
-    // breaks) that carry no strong character of their own and would otherwise
-    // default to LTR. Call resetState() when the player switches media item or
-    // subtitle track so context doesn't leak between unrelated videos.
-    @Volatile
-    private var lastKnownArabicContext: Boolean = false
-
-    fun resetState() {
-        lastKnownArabicContext = false
-    }
-
-    /**
-     * Fixes a single cue's text.
-     *
-     * @param forceArabic When non-null, overrides self-detection and treats the
-     *   cue as Arabic (true) or as "leave to normal detection" (null). Used by
-     *   [fixTimedCues] to propagate an entry-wide Arabic context onto sibling
-     *   cues that have no letters of their own. Direct callers can leave this
-     *   as null to get the original self-contained behavior.
-     */
-    fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean, forceArabic: Boolean? = null): Cue {
+    fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
         val text = cue.text ?: return cue
-        if (!hasAnyRtlCharacter(text) && forceArabic != true) {
+        if (!hasAnyRtlCharacter(text)) {
             return cue
         }
 
-        val isArabic = forceArabic ?: containsArabic(text)
-        if (isArabic) {
+        if (containsArabic(text)) {
             val fixed = fixArabicLines(text, isBuiltInSubtitle) ?: return cue
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
@@ -63,41 +41,10 @@ internal object AndroidPlayerSubtitleRtlFix {
         val out = ArrayList<CuesWithTiming>(cues.size)
         for (entry in cues) {
             val entryCues = entry.cues
-            if (entryCues.isEmpty()) {
-                out.add(entry)
-                continue
-            }
-
-            // Determine Arabic context for the WHOLE entry (all cue objects that
-            // are simultaneously visible), not each Cue individually. Some
-            // subtitle formats (ASS/SSA, dual-language tracks) split one visual
-            // block into multiple Cue objects — e.g. one per line — and a given
-            // line may contain nothing but digits, a Latin name, or punctuation
-            // like "*" / "„" / "»«". Those letterless lines get no vote of their
-            // own; they inherit the entry's (or, failing that, the last known)
-            // direction instead of silently defaulting to LTR.
-            val combinedText = StringBuilder()
-            for (c in entryCues) {
-                c.text?.let { combinedText.append(it).append('\n') }
-            }
-            val entryHasLetter = combinedText.any { Character.isLetter(it) }
-            val entryIsArabicContext = if (entryHasLetter) {
-                containsArabic(combinedText).also { lastKnownArabicContext = it }
-            } else {
-                lastKnownArabicContext
-            }
-
             var modified: ArrayList<Cue>? = null
             for (i in entryCues.indices) {
                 val original = entryCues[i]
-                val ownHasLetter = original.text?.any { Character.isLetter(it) } == true
-                // Only letterless cues (pure symbols/digits) get force-wrapped
-                // from entry context; cues with their own letters keep the
-                // original self-contained detection, so mixed bilingual blocks
-                // aren't force-flipped just because a sibling line is Arabic.
-                val forceArabic: Boolean? =
-                    if (!ownHasLetter && entryIsArabicContext) true else null
-                val fixed = fixCueText(original, isBuiltInSubtitle, forceArabic)
+                val fixed = fixCueText(original, isBuiltInSubtitle)
                 if (fixed !== original) {
                     if (modified == null) {
                         modified = ArrayList(entryCues.size)
@@ -129,21 +76,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
-
-    // ============================================================
-    // Arabic-only punctuation fix path.
-    //
-    // Deliberately fully DUPLICATED (not shared) from the Hebrew helpers
-    // further below. This is intentional: Arabic subtitle sources (esp.
-    // fan/community translations) show a much wider and messier variety of
-    // leading/trailing neutral punctuation than Hebrew ever does — Arabic
-    // punctuation marks (؟ ، ؛), plain Latin punctuation left in by the
-    // translator, decorative bracket styles («» / ﴿﴾ / 「」 / 『』 / 【】),
-    // and even CJK/Devanagari punctuation that shows up when a translator
-    // copy-pasted from another localized track. Keeping this path fully
-    // separate means any future tuning for Arabic-specific noise can NEVER
-    // regress Hebrew rendering, and vice versa.
-    // ============================================================
 
     private fun fixArabicLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
@@ -210,10 +142,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return finishBuilder(out)
     }
 
-    // Mirrors bracket-style punctuation when it gets moved across the line
-    // (a "(" that was trailing becomes a leading ")" and vice-versa, etc).
-    // Covers ASCII, Arabic ornate parens, angle/guillemet quotes, and the
-    // common CJK bracket styles some translators paste in.
     private fun mirrorPunctuationArabic(c: Char): Char = when (c) {
         '(' -> ')'
         ')' -> '('
@@ -293,7 +221,6 @@ internal object AndroidPlayerSubtitleRtlFix {
     private fun isArabicDigit(c: Char): Boolean {
         if (c.isDigit()) return true
         val code = c.code
-        // Arabic-Indic digits (٠-٩) and Extended Arabic-Indic / Persian digits (۰-۹)
         return code in 0x0660..0x0669 || code in 0x06F0..0x06F9
     }
 
@@ -302,49 +229,23 @@ internal object AndroidPlayerSubtitleRtlFix {
         return ch in ARABIC_RTL_PUNCTUATION || ch.isWhitespace()
     }
 
-    // Broad, intentionally generous set of "neutral" leading/trailing marks
-    // that can show up in Arabic community subtitle tracks:
-    //  - Arabic-native punctuation: ؟ ، ؛ ٪ ـ ٫ ٬ ۔
-    //  - Ornate Arabic quote/parens: ﴿ ﴾
-    //  - Plain ASCII punctuation translators often leave in: . , ? ! - : ; … ' " * # = ^ ~ + | \ / _ @ & %
-    //  - Bracket family (ASCII + CJK + guillemets), used as dialogue/scene markers: ( ) [ ] { } < > « » 「 」 『 』 【 】 （ ） 〈 〉 《 》
-    //  - CJK punctuation occasionally pasted in from other localized tracks: 。 、 ， ！ ？ ： ； “ ” ‘ ’ ・ ～
-    //  - Devanagari/Hindi danda marks: । ॥
     private val ARABIC_RTL_PUNCTUATION = setOf(
-        // ASCII punctuation
         '.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"', '*',
         '{', '}', '[', ']', '<', '>', '^', '=', '#', '@', '&', '%', '+', '~', '|', '\\', '/', '_',
-        // Arabic-native punctuation
-        '؟', '،', '؛', '٪', 'ـ', '٫', '٬', '۔',
-        // Ornate Arabic parens / guillemets
         '﴿', '﴾', '«', '»',
-        // CJK-style brackets
         '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
-        // CJK punctuation
-        '。', '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
-        // Devanagari danda
+        '。', '、', '，', '！', '？', '：', '；', '"', '"', ''', ''', '・', '～',
         '।', '॥'
     ) + ('0'..'9')
 
-    // Slightly narrower set used for the built-in-subtitle "move leading
-    // marks to the end" pass (mirrors the scope of the shared Hebrew
-    // MOBILE_RTL_PUNCTUATION set, but expanded the same way as above).
     private val ARABIC_MOBILE_RTL_PUNCTUATION = setOf(
         '.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '*',
         '{', '}', '[', ']', '<', '>', '^', '#', '@', '&', '%', '+', '~', '|', '/', '_',
-        '؟', '،', '؛', '٪', 'ـ', '٫', '٬', '۔',
         '﴿', '﴾', '«', '»',
         '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
-        '。', '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
+        '。', '、', '，', '！', '？', '：', '；', '"', '"', ''', ''', '・', '～',
         '।', '॥'
     )
-
-    // ============================================================
-    // Hebrew path — UNCHANGED. Do not modify this section or anything
-    // it depends on (fixRtlPunctuationForLtr, moveLeadingRtlPunctuationToEndForBuiltIn,
-    // mirrorPunctuation, appendMirroredReversed, isRtlPunctuation,
-    // RTL_PUNCTUATION, MOBILE_RTL_PUNCTUATION).
-    // ============================================================
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
@@ -506,13 +407,9 @@ internal object AndroidPlayerSubtitleRtlFix {
         return sb
     }
 
-    // Strips both the legacy embedding marks (LRE/RLE/PDF, LRM/RLM) AND the
-    // modern isolate marks (LRI/RLI/FSI/PDI) so re-processing an already-fixed
-    // cue (e.g. if the pipeline runs twice) never double-wraps it.
     private fun isDirectionalMark(c: Char): Boolean =
         c == '\u202A' || c == '\u202B' || c == '\u202C' ||
-            c == '\u200E' || c == '\u200F' ||
-            c == '\u2066' || c == '\u2067' || c == '\u2068' || c == '\u2069'
+            c == '\u200E' || c == '\u200F'
 
     private fun CharSequence.splitByNewlines(): List<CharSequence> {
         val result = mutableListOf<CharSequence>()
@@ -586,6 +483,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"', '*') + ('0'..'9')
-    private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '*')
+    private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
+    private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
 }
