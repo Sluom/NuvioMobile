@@ -9,7 +9,7 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.CuesWithTiming
 
-internal object PlayerSubtitleRtlFix {
+internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
         val text = cue.text ?: return cue
@@ -234,7 +234,7 @@ internal object PlayerSubtitleRtlFix {
         '{', '}', '[', ']', '<', '>', '^', '=', '#', '@', '&', '%', '+', '~', '|', '\\', '/', '_',
         '﴿', '﴾', '«', '»',
         '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
-        '。', '、', '，', '！', '？', '：', '；', '"', '"', ''', ''', '・', '～',
+        '。', '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
         '।', '॥'
     ) + ('0'..'9')
 
@@ -243,7 +243,7 @@ internal object PlayerSubtitleRtlFix {
         '{', '}', '[', ']', '<', '>', '^', '#', '@', '&', '%', '+', '~', '|', '/', '_',
         '﴿', '﴾', '«', '»',
         '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
-        '。', '、', '，', '！', '？', '：', '；', '"', '"', ''', ''', '・', '～',
+        '。', '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
         '।', '॥'
     )
 
