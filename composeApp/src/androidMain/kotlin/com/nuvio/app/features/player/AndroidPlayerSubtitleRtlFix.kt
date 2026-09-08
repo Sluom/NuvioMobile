@@ -40,7 +40,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
         val isArabic = forceArabic ?: containsArabic(text)
         if (isArabic) {
-            val fixed = wrapArabicLines(text)
+            val fixed = fixArabicLines(text, isBuiltInSubtitle) ?: return cue
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -130,34 +130,221 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    // Uses RLI (U+2067) / PDI (U+2069) — Unicode Bidi *isolates* — instead of
-    // the older RLE (U+202B) / PDF (U+202C) *embedding* characters. Isolates
-    // are the modern, more robust way to force a paragraph's base direction:
-    // they don't let neighboring strong characters "leak" into the wrapped
-    // run, which is what caused lines starting with a digit, a Latin name, or
-    // punctuation to sometimes render LTR despite containing Arabic text.
-    private fun wrapArabicLines(text: CharSequence): CharSequence {
+    // ============================================================
+    // Arabic-only punctuation fix path.
+    //
+    // Deliberately fully DUPLICATED (not shared) from the Hebrew helpers
+    // further below. This is intentional: Arabic subtitle sources (esp.
+    // fan/community translations) show a much wider and messier variety of
+    // leading/trailing neutral punctuation than Hebrew ever does — Arabic
+    // punctuation marks (؟ ، ؛), plain Latin punctuation left in by the
+    // translator, decorative bracket styles («» / ﴿﴾ / 「」 / 『』 / 【】),
+    // and even CJK/Devanagari punctuation that shows up when a translator
+    // copy-pasted from another localized track. Keeping this path fully
+    // separate means any future tuning for Arabic-specific noise can NEVER
+    // regress Hebrew rendering, and vice versa.
+    // ============================================================
+
+    private fun fixArabicLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)
         val lines = text.splitByNewlines()
+        var changed = false
         for (i in lines.indices) {
             if (i > 0) builder.append('\n')
-            val line = lines[i].stripDirectionalWrap()
-            if (line.isEmpty()) {
-                builder.append(line)
-                continue
+            val stripped = lines[i].stripDirectionalWrap()
+            if (stripped.toString() != lines[i].toString()) changed = true
+            val fixed = if (isBuiltInSubtitle) {
+                moveLeadingArabicPunctuationToEndForBuiltIn(stripped, preserveSpans)
+            } else {
+                fixArabicLeadingTrailingPunctuationForLtr(stripped, preserveSpans)
             }
-            val hasCr = line[line.length - 1] == '\r'
-            val core = if (hasCr) line.subSequence(0, line.length - 1) else line
-            if (core.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-            builder.append('\u2067').append(core).append('\u2069')
-            if (hasCr) builder.append('\r')
+            if (fixed !== stripped && fixed.toString() != stripped.toString()) changed = true
+            builder.append(fixed)
         }
+        if (!changed) return null
         return finishBuilder(builder)
     }
+
+    private fun fixArabicLeadingTrailingPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
+        if (line.isEmpty()) return line
+        val hasCr = line[line.length - 1] == '\r'
+        val end0 = if (hasCr) line.length - 1 else line.length
+        if (end0 == 0) return line
+
+        var start = 0
+        while (start < end0 && isArabicRtlPunctuation(line[start], isEnd = false)) start++
+
+        var end = end0
+        while (end > start && isArabicRtlPunctuation(line[end - 1], isEnd = true)) end--
+
+        if (start == 0 && end == end0) return line
+
+        val out: Appendable =
+            if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
+        appendMirroredReversedArabic(out, line, end, end0)
+        out.append(line.subSequence(start, end))
+        appendMirroredReversedArabic(out, line, 0, start)
+        if (hasCr) out.append('\r')
+        return finishBuilder(out)
+    }
+
+    private fun moveLeadingArabicPunctuationToEndForBuiltIn(
+        line: CharSequence,
+        preserveSpans: Boolean
+    ): CharSequence {
+        if (line.isEmpty()) return line
+        val hasCr = line[line.length - 1] == '\r'
+        val end0 = if (hasCr) line.length - 1 else line.length
+        if (end0 == 0) return line
+
+        var end = 0
+        while (end < end0 && line[end] in ARABIC_MOBILE_RTL_PUNCTUATION) end++
+        if (end == 0) return line
+
+        val out: Appendable =
+            if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
+        out.append(line.subSequence(end, end0))
+            .append(line.subSequence(0, end))
+        if (hasCr) out.append('\r')
+        return finishBuilder(out)
+    }
+
+    // Mirrors bracket-style punctuation when it gets moved across the line
+    // (a "(" that was trailing becomes a leading ")" and vice-versa, etc).
+    // Covers ASCII, Arabic ornate parens, angle/guillemet quotes, and the
+    // common CJK bracket styles some translators paste in.
+    private fun mirrorPunctuationArabic(c: Char): Char = when (c) {
+        '(' -> ')'
+        ')' -> '('
+        '[' -> ']'
+        ']' -> '['
+        '{' -> '}'
+        '}' -> '{'
+        '<' -> '>'
+        '>' -> '<'
+        '«' -> '»'
+        '»' -> '«'
+        '﴿' -> '﴾'
+        '﴾' -> '﴿'
+        '「' -> '」'
+        '」' -> '「'
+        '『' -> '』'
+        '』' -> '『'
+        '【' -> '】'
+        '】' -> '【'
+        '（' -> '）'
+        '）' -> '（'
+        '〈' -> '〉'
+        '〉' -> '〈'
+        '《' -> '》'
+        '》' -> '《'
+        else -> c
+    }
+
+    private fun appendMirroredReversedArabic(
+        out: Appendable,
+        line: CharSequence,
+        from: Int,
+        toExclusive: Int
+    ) {
+        if (from >= toExclusive) return
+
+        fun isNumberSeparator(c: Char) = c == ',' || c == ':' || c == '.' || c == '-'
+
+        val chunks = ArrayList<IntRange>()
+        var i = from
+        while (i < toExclusive) {
+            if (isArabicDigit(line[i])) {
+                val start = i
+                i++
+                while (i < toExclusive) {
+                    if (isArabicDigit(line[i])) {
+                        i++
+                    } else if (
+                        isNumberSeparator(line[i]) &&
+                        i + 1 < toExclusive &&
+                        isArabicDigit(line[i + 1])
+                    ) {
+                        i++
+                    } else {
+                        break
+                    }
+                }
+                chunks.add(start until i)
+            } else {
+                chunks.add(i until i + 1)
+                i++
+            }
+        }
+
+        for (idx in chunks.indices.reversed()) {
+            val range = chunks[idx]
+            if (range.last - range.first + 1 > 1) {
+                out.append(line.subSequence(range.first, range.last + 1))
+            } else {
+                val c = line[range.first]
+                val m = mirrorPunctuationArabic(c)
+                if (m != c) out.append(m) else out.append(line.subSequence(range.first, range.first + 1))
+            }
+        }
+    }
+
+    private fun isArabicDigit(c: Char): Boolean {
+        if (c.isDigit()) return true
+        val code = c.code
+        // Arabic-Indic digits (٠-٩) and Extended Arabic-Indic / Persian digits (۰-۹)
+        return code in 0x0660..0x0669 || code in 0x06F0..0x06F9
+    }
+
+    private fun isArabicRtlPunctuation(ch: Char, isEnd: Boolean): Boolean {
+        if (isEnd && isArabicDigit(ch)) return false
+        return ch in ARABIC_RTL_PUNCTUATION || ch.isWhitespace()
+    }
+
+    // Broad, intentionally generous set of "neutral" leading/trailing marks
+    // that can show up in Arabic community subtitle tracks:
+    //  - Arabic-native punctuation: ؟ ، ؛ ٪ ـ ٫ ٬ ۔
+    //  - Ornate Arabic quote/parens: ﴿ ﴾
+    //  - Plain ASCII punctuation translators often leave in: . , ? ! - : ; … ' " * # = ^ ~ + | \ / _ @ & %
+    //  - Bracket family (ASCII + CJK + guillemets), used as dialogue/scene markers: ( ) [ ] { } < > « » 「 」 『 』 【 】 （ ） 〈 〉 《 》
+    //  - CJK punctuation occasionally pasted in from other localized tracks: 。 、 ， ！ ？ ： ； “ ” ‘ ’ ・ ～
+    //  - Devanagari/Hindi danda marks: । ॥
+    private val ARABIC_RTL_PUNCTUATION = setOf(
+        // ASCII punctuation
+        '.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"', '*',
+        '{', '}', '[', ']', '<', '>', '^', '=', '#', '@', '&', '%', '+', '~', '|', '\\', '/', '_',
+        // Arabic-native punctuation
+        '؟', '،', '؛', '٪', 'ـ', '٫', '٬', '۔',
+        // Ornate Arabic parens / guillemets
+        '﴿', '﴾', '«', '»',
+        // CJK-style brackets
+        '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
+        // CJK punctuation
+        '。', '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
+        // Devanagari danda
+        '।', '॥'
+    ) + ('0'..'9')
+
+    // Slightly narrower set used for the built-in-subtitle "move leading
+    // marks to the end" pass (mirrors the scope of the shared Hebrew
+    // MOBILE_RTL_PUNCTUATION set, but expanded the same way as above).
+    private val ARABIC_MOBILE_RTL_PUNCTUATION = setOf(
+        '.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '*',
+        '{', '}', '[', ']', '<', '>', '^', '#', '@', '&', '%', '+', '~', '|', '/', '_',
+        '؟', '،', '؛', '٪', 'ـ', '٫', '٬', '۔',
+        '﴿', '﴾', '«', '»',
+        '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
+        '。', '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
+        '।', '॥'
+    )
+
+    // ============================================================
+    // Hebrew path — UNCHANGED. Do not modify this section or anything
+    // it depends on (fixRtlPunctuationForLtr, moveLeadingRtlPunctuationToEndForBuiltIn,
+    // mirrorPunctuation, appendMirroredReversed, isRtlPunctuation,
+    // RTL_PUNCTUATION, MOBILE_RTL_PUNCTUATION).
+    // ============================================================
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
@@ -399,6 +586,6 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false
     }
 
-    private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
-    private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
+    private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"', '*') + ('0'..'9')
+    private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '*')
 }
