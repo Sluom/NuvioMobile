@@ -225,23 +225,9 @@ internal object AndroidPlayerSubtitleRtlFix {
         return ch in ARABIC_RTL_PUNCTUATION || ch.isWhitespace()
     }
 
-    private val ARABIC_RTL_PUNCTUATION = setOf(
-        '-', ')', '(', '\'', '"', '*',
-        '{', '}', '[', ']', '<', '>', '^', '=', '#', '@', '&', '%', '+', '~', '|', '\\', '/', '_',
-        '﴿', '﴾', '«', '»',
-        '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
-        '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
-        '।', '॥'
-    ) + ('0'..'9')
+    private val ARABIC_RTL_PUNCTUATION = setOf('-') + ('0'..'9')
 
-    private val ARABIC_MOBILE_RTL_PUNCTUATION = setOf(
-        '-', ')', '(', '*',
-        '{', '}', '[', ']', '<', '>', '^', '#', '@', '&', '%', '+', '~', '|', '/', '_',
-        '﴿', '﴾', '«', '»',
-        '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
-        '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
-        '।', '॥'
-    )
+    private val ARABIC_MOBILE_RTL_PUNCTUATION = setOf('-')
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
