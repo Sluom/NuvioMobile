@@ -11,9 +11,12 @@ import androidx.media3.extractor.text.CuesWithTiming
 
 internal object AndroidPlayerSubtitleRtlFix {
 
+    // الذاكرة المؤقتة وحالة زر التبديل للتحكم بتفعيل أو تعطيل المعالجة
+    var isRtlEnabled: Boolean = true
+
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
-        // قاطع الزر: إيقاف المعالجة إذا كان الزر مطفأ
-        if (!AndroidPlayerSubtitleRtlFix.isRtlEnabled) return cue
+        // قاطع الزر الرئيسي: إيقاف المعالجة فوراً إذا كان الزر مطفأ
+        if (!isRtlEnabled) return cue
 
         val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
