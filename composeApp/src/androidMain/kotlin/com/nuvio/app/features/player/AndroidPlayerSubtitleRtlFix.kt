@@ -9,11 +9,11 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.CuesWithTiming
 
-internal object PlayerSubtitleRtlFix {
+internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
         // قاطع الزر: إيقاف المعالجة إذا كان الزر مطفأ
-        if (!PlayerSubtitleRtlFix.isRtlEnabled) return cue
+        if (!AndroidPlayerSubtitleRtlFix.isRtlEnabled) return cue
 
         val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
