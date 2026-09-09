@@ -104,19 +104,15 @@ internal object AndroidPlayerSubtitleRtlFix {
         val end0 = if (hasCr) line.length - 1 else line.length
         if (end0 == 0) return line
 
-        var start = 0
-        while (start < end0 && isArabicRtlPunctuation(line[start], isEnd = false)) start++
-
         var end = end0
-        while (end > start && isArabicRtlPunctuation(line[end - 1], isEnd = true)) end--
+        while (end > 0 && isArabicRtlPunctuation(line[end - 1], isEnd = true)) end--
 
-        if (start == 0 && end == end0) return line
+        if (end == end0) return line
 
         val out: Appendable =
             if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
         appendMirroredReversedArabic(out, line, end, end0)
-        out.append(line.subSequence(start, end))
-        appendMirroredReversedArabic(out, line, 0, start)
+        out.append(line.subSequence(0, end))
         if (hasCr) out.append('\r')
         return finishBuilder(out)
     }
