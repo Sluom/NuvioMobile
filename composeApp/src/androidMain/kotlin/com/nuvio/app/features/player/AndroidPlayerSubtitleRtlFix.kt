@@ -18,7 +18,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         }  
 
         if (containsArabic(text)) {  
-            val fixed = fixArabicLines(text, isBuiltInSubtitle) ?: return cue  
+            val fixed = fixArabicLinesSmart(text) ?: return cue  
             if (fixed.contentEquals(text)) return cue  
             return cue.buildUpon().setText(fixed).build()  
         }  
@@ -77,25 +77,96 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)  
     }  
 
-    private fun fixArabicLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {  
-        val preserveSpans = text is Spanned  
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)  
-        val lines = text.splitByNewlines()  
-        var changed = false  
-        for (i in lines.indices) {  
-            if (i > 0) builder.append('\n')  
-            val line = lines[i].stripDirectionalWrap()  
-            val fixed = if (isBuiltInSubtitle) {  
-                moveLeadingRtlPunctuationToEndForBuiltIn(line, preserveSpans)  
-            } else {  
-                fixRtlPunctuationForLtr(line, preserveSpans)  
-            }  
-            if (fixed !== line && fixed.toString() != line.toString()) changed = true  
-            builder.append(fixed)  
-        }  
-        if (!changed) return null  
-        return finishBuilder(builder)  
-    }  
+    /**
+     * المعالجة الذكية الخاصة باللغة العربية:
+     * تمنع العكس الأعمى للأسطر السليمة، وتعالج فقط الاصطدامات الطرفية المزدوجة والاقتباسات المنفصلة.
+     */
+    private fun fixArabicLinesSmart(text: CharSequence): CharSequence? {
+        val preserveSpans = text is Spanned
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
+        val lines = text.splitByNewlines()
+        var changed = false
+
+        for (i in lines.indices) {
+            if (i > 0) builder.append('\n')
+            val line = lines[i].stripDirectionalWrap()
+            if (line.isEmpty()) {
+                builder.append(line)
+                continue
+            }
+
+            val hasCr = line[line.length - 1] == '\r'
+            val core = if (hasCr) line.subSequence(0, line.length - 1) else line
+            if (core.isEmpty()) {
+                builder.append(line)
+                continue
+            }
+
+            val fixedLine = resolveArabicLineOrder(core, preserveSpans)
+            if (fixedLine !== core && fixedLine.toString() != core.toString()) {
+                changed = true
+            }
+
+            // تغليف السطر بـ \u202B و \u202C كما في كود Nuvio الأصلي للحفاظ على استقرار محاذاة النص
+            builder.append('\u202B').append(fixedLine).append('\u202C')
+            if (hasCr) builder.append('\r')
+        }
+
+        if (!changed) return null
+        return finishBuilder(builder)
+    }
+
+    private fun resolveArabicLineOrder(line: CharSequence, preserveSpans: Boolean): CharSequence {
+        val len = line.length
+        if (len == 0) return line
+
+        var start = 0
+        while (start < len && isArabicBoundaryPunctuation(line[start])) start++
+
+        var end = len
+        while (end > start && isArabicBoundaryPunctuation(line[end - 1])) end--
+
+        val hasLeadingPunct = start > 0
+        val hasTrailingPunct = end < len
+
+        // 1. إذا كان السطر يبدأ برمز وينتهي برمز في نفس الوقت (مثل: "- انظر!" أو "«نص»،"): اصطدام طرفي مزدوج يستوجب العكس
+        if (hasLeadingPunct && hasTrailingPunct) {
+            val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(len)
+            appendMirroredReversed(out, line, end, len)
+            out.append(line.subSequence(start, end))
+            appendMirroredReversed(out, line, 0, start)
+            return finishBuilder(out)
+        }
+
+        // 2. إذا انتهى السطر بعلامة اقتباس غير مقفلة في نفس السطر (مثل سرد Goodfellas الممتد): نقل الاقتباس الطرفي
+        if (!hasLeadingPunct && hasTrailingPunct) {
+            val trailingChar = line[len - 1]
+            if (trailingChar == '"' || trailingChar == '”' || trailingChar == '»') {
+                val quoteCount = line.count { it == trailingChar }
+                if (quoteCount % 2 != 0) {
+                    val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(len)
+                    out.append(trailingChar)
+                    out.append(line.subSequence(0, len - 1))
+                    return finishBuilder(out)
+                }
+            }
+        }
+
+        // 3. باقي الحالات: أسطر عادية طبيعية (تنتهي بنقطة، أو تبدأ بشرطة حوارية فقط) تترك كما هي دون لمس
+        return line
+    }
+
+    private fun isArabicBoundaryPunctuation(c: Char): Boolean =
+        c in ARABIC_BOUNDARY_PUNCTUATION || c.isWhitespace()
+
+    private val ARABIC_BOUNDARY_PUNCTUATION = setOf(
+        '.', ',', '?', '!', '-', ':', ';', '…', ')', '(',
+        '،', '؟', '؛', '«', '»', '“', '”', '"', '\'', '[', ']', '{', '}', '–', '—'
+    )
+
+    // =========================================================================
+    // الدوال الخاصة باللغة العبرية وعمليات المعالجة المشتركة (دون أي تعديل)
+    // =========================================================================
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {  
         val preserveSpans = text is Spanned  
@@ -267,7 +338,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun isDirectionalMark(c: Char): Boolean =  
         c == '\u202A' || c == '\u202B' || c == '\u202C' ||  
-            c == '\u200E' || c == '\u200F'  
+            c == '\u200E' || c == '\u200F' || c == '\u061C'
 
     private fun CharSequence.splitByNewlines(): List<CharSequence> {  
         val result = mutableListOf<CharSequence>()  
@@ -341,14 +412,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         return false  
     }  
 
-    private val RTL_PUNCTUATION = setOf(
-        '.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"',
-        '،', '؟', '؛', '«', '»', '“', '”', '‘', '’', '–', '—', '[', ']', '{', '}'
-    ) + ('0'..'9')  
-
-    private val MOBILE_RTL_PUNCTUATION = setOf(
-        '.', ',', '?', '!', '-', ':', ';', '…', ')', '(',
-        '،', '؟', '؛', '«', '»', '“', '”', '‘', '’', '–', '—', '[', ']', '{', '}'
-    )
+    private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')  
+    private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
 
 }
