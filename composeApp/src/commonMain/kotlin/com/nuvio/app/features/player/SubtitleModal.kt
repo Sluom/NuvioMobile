@@ -307,6 +307,13 @@ fun SubtitleModal(
                                     onAutoSyncCapture = onAutoSyncCapture,
                                     onAutoSyncCueSelected = onAutoSyncCueSelected,
                                     onAutoSyncReload = onAutoSyncReload,
+                                    onRtlToggle = {
+                                        if (effectiveSelectedAddonSubtitle != null) {
+                                            onAddonSubtitleSelected(effectiveSelectedAddonSubtitle)
+                                        } else if (selectedSubtitleIndex >= 0) {
+                                            onBuiltInTrackSelected(selectedSubtitleIndex)
+                                        }
+                                    },
                                 )
                             }
                         }
