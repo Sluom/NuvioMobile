@@ -12,16 +12,20 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
-        // الربط الصحيح: قراءة الزر من كائن الواجهة (PlayerSubtitleRtlFix) حصراً
-        if (!PlayerSubtitleRtlFix.isRtlEnabled) return cue
-
         val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
             return cue
         }
 
         if (containsArabic(text)) {
-            val fixed = wrapArabicLines(text)
+            val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
+            
+            val fixed = if (isMessy) {
+                applyVisualSwapping(text)
+            } else {
+                wrapArabicLines(text)
+            }
+            
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -80,6 +84,139 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
+    private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
+        if (isBuiltInSubtitle) return false
+        
+        val lines = text.splitByNewlines()
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) continue
+            
+            if (hasMessyLeadingBoundary(trimmed) || hasMessyTrailingBoundary(trimmed)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun hasMessyLeadingBoundary(text: CharSequence): Boolean {
+        if (text.isEmpty()) return false
+        val firstChar = text.first()
+        
+        if (firstChar == '-' || firstChar == '—') {
+            return false
+        }
+        
+        return isBoundaryPunctuation(firstChar)
+    }
+
+    private fun hasMessyTrailingBoundary(text: CharSequence): Boolean {
+        if (text.isEmpty()) return false
+        val lastChar = text.last()
+        
+        if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',') {
+            if (text.length > 1) {
+                val prevChar = text[text.length - 2]
+                if (prevChar == '.' || prevChar == ',' || prevChar == '،' || prevChar == '؟' || prevChar == '?') {
+                    return true
+                }
+            }
+            return false
+        }
+        
+        return isBoundaryPunctuation(lastChar)
+    }
+
+    private fun applyVisualSwapping(text: CharSequence): CharSequence {
+        val preserveSpans = text is Spanned
+        val lines = text.splitByNewlines()
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
+        
+        for (i in lines.indices) {
+            if (i > 0) builder.append('\n')
+            val line = lines[i].stripDirectionalWrap()
+            
+            if (line.isEmpty() || !containsArabic(line)) {
+                builder.append(line)
+                continue
+            }
+            
+            val hasCr = line.lastOrNull() == '\r'
+            val rawCore = if (hasCr) line.subSequence(0, line.length - 1) else line
+            
+            if (rawCore.isEmpty()) {
+                if (hasCr) builder.append('\r')
+                continue
+            }
+            
+            val cleanCore = StringBuilder()
+            var hasQuestionMark = false
+            for (k in 0 until rawCore.length) {
+                val ch = rawCore[k]
+                if (ch == '؟' || ch == '?') {
+                    hasQuestionMark = true
+                } else {
+                    cleanCore.append(ch)
+                }
+            }
+            
+            var start = 0
+            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
+            
+            var end = cleanCore.length
+            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
+            
+            if (start >= end) {
+                builder.append(cleanCore)
+                if (hasQuestionMark) builder.append('؟')
+                if (hasCr) builder.append('\r')
+                continue
+            }
+            
+            val leadingPunc = cleanCore.subSequence(0, start)
+            val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
+            val middleText = cleanCore.subSequence(start, end)
+            
+            for (j in trailingPunc.indices.reversed()) {
+                builder.append(mirrorArabicPunctuation(trailingPunc[j]))
+            }
+            
+            builder.append('\u202B').append(middleText).append('\u202C')
+            
+            for (j in leadingPunc.indices.reversed()) {
+                builder.append(mirrorArabicPunctuation(leadingPunc[j]))
+            }
+            
+            if (hasQuestionMark) {
+                builder.append('؟')
+            }
+            
+            if (hasCr) builder.append('\r')
+        }
+        return finishBuilder(builder)
+    }
+
+    private fun isBoundaryPunctuation(c: Char): Boolean {
+        return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
+               c == '!' || c == '؟' || c == '?' ||
+               c == '-' || c == '—' ||
+               c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+               c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
+               c.isWhitespace()
+    }
+
+    private fun mirrorArabicPunctuation(c: Char): Char = when (c) {
+        '(' -> ')'
+        ')' -> '('
+        '[' -> ']'
+        ']' -> '['
+        '{' -> '}'
+        '}' -> '{'
+        '«' -> '»'
+        '»' -> '«'
+        else -> c
+    }
+
     private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
@@ -91,13 +228,15 @@ internal object AndroidPlayerSubtitleRtlFix {
                 builder.append(line)
                 continue
             }
-            val hasCr = line[line.length - 1] == '\r'
+            val hasCr = line.lastOrNull() == '\r'
             val core = if (hasCr) line.subSequence(0, line.length - 1) else line
             if (core.isEmpty()) {
                 builder.append(line)
                 continue
             }
-            builder.append('\u202B').append(core).append('\u202C')
+            
+            builder.append('\u200F').append('\u202B').append(core).append('\u202C').append('\u200F')
+            
             if (hasCr) builder.append('\r')
         }
         return finishBuilder(builder)
