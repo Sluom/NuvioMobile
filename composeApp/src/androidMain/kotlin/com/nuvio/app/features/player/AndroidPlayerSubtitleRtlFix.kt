@@ -9,7 +9,7 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.CuesWithTiming
 
-internal object PlayerSubtitleRtlFix {
+internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {  
         val text = cue.text ?: return cue  
@@ -96,13 +96,8 @@ internal object PlayerSubtitleRtlFix {
             }  
 
             if (containsArabic(core)) {
-                // \u200F (RLM) لفرض سياق الفقرة القوي لمنع انقلاب الشرطات والاقتباسات الطرفية
-                // \u2067 (RLI) و \u2069 (PDI) لعزل السطر بالكامل ومنع تسرب الرموز المحايدة للحاوية
-                builder.append('\u200F')
-                    .append('\u2067')
-                    .append(core)
-                    .append('\u2069')
-                    .append('\u200F')
+                // دمج \u200F مع \u202B يفرض سياق RTL قوي على مستوى الفقرة ويمنع انقلاب علامات الاقتباس والشارحات الطرفية
+                builder.append('\u200F').append('\u202B').append(core).append('\u202C').append('\u200F')
             } else {
                 builder.append(core)
             }
@@ -274,8 +269,7 @@ internal object PlayerSubtitleRtlFix {
 
     private fun isDirectionalMark(c: Char): Boolean =  
         c == '\u202A' || c == '\u202B' || c == '\u202C' ||  
-            c == '\u200E' || c == '\u200F' ||
-            c == '\u2066' || c == '\u2067' || c == '\u2068' || c == '\u2069'
+            c == '\u200E' || c == '\u200F'  
 
     private fun CharSequence.splitByNewlines(): List<CharSequence> {  
         val result = mutableListOf<CharSequence>()  
