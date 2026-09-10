@@ -12,13 +12,16 @@ import androidx.media3.extractor.text.CuesWithTiming
 internal object AndroidPlayerSubtitleRtlFix {
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
+        // الربط الصحيح: قراءة الزر من كائن الواجهة (PlayerSubtitleRtlFix) حصراً
+        if (!PlayerSubtitleRtlFix.isRtlEnabled) return cue
+
         val text = cue.text ?: return cue
         if (!hasAnyRtlCharacter(text)) {
             return cue
         }
 
         if (containsArabic(text)) {
-            val fixed = fixArabicLines(text, isBuiltInSubtitle) ?: return cue
+            val fixed = wrapArabicLines(text)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -77,199 +80,28 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun fixArabicLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
+    private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length)
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
         val lines = text.splitByNewlines()
-        var changed = false
         for (i in lines.indices) {
             if (i > 0) builder.append('\n')
-            val stripped = lines[i].stripDirectionalWrap()
-            if (stripped.toString() != lines[i].toString()) changed = true
-            val fixed = if (isBuiltInSubtitle) {
-                moveLeadingArabicPunctuationToEndForBuiltIn(stripped, preserveSpans)
-            } else {
-                fixArabicLeadingTrailingPunctuationForLtr(stripped, preserveSpans)
+            val line = lines[i].stripDirectionalWrap()
+            if (line.isEmpty()) {
+                builder.append(line)
+                continue
             }
-            if (fixed !== stripped && fixed.toString() != stripped.toString()) changed = true
-            builder.append(fixed)
+            val hasCr = line[line.length - 1] == '\r'
+            val core = if (hasCr) line.subSequence(0, line.length - 1) else line
+            if (core.isEmpty()) {
+                builder.append(line)
+                continue
+            }
+            builder.append('\u202B').append(core).append('\u202C')
+            if (hasCr) builder.append('\r')
         }
-        if (!changed) return null
         return finishBuilder(builder)
     }
-
-    private fun fixArabicLeadingTrailingPunctuationForLtr(line: CharSequence, preserveSpans: Boolean): CharSequence {
-        if (line.isEmpty()) return line
-        val hasCr = line[line.length - 1] == '\r'
-        val end0 = if (hasCr) line.length - 1 else line.length
-        if (end0 == 0) return line
-
-        var end = end0
-        while (end > 0) {
-            val c = line[end - 1]
-            if (!isArabicRtlPunctuation(c, isEnd = true)) break
-            if (!c.isWhitespace() && isProtectedArabicPairChar(line, c)) break
-            end--
-        }
-
-        if (end == end0) return line
-
-        val out: Appendable =
-            if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
-        appendMirroredReversedArabic(out, line, end, end0)
-        out.append(line.subSequence(0, end))
-        if (hasCr) out.append('\r')
-        return finishBuilder(out)
-    }
-
-    private fun isPairFamilyBalanced(line: CharSequence, open: Char, close: Char): Boolean {
-        if (open == close) {
-            var count = 0
-            for (c in line) if (c == open) count++
-            return count % 2 == 0
-        }
-        var balance = 0
-        for (c in line) {
-            if (c == open) balance++
-            else if (c == close) balance--
-        }
-        return balance == 0
-    }
-
-    private fun isProtectedArabicPairChar(line: CharSequence, ch: Char): Boolean {
-        for (pair in ARABIC_PAIR_FAMILIES) {
-            if (ch == pair.first || ch == pair.second) {
-                return isPairFamilyBalanced(line, pair.first, pair.second)
-            }
-        }
-        return false
-    }
-
-    private fun moveLeadingArabicPunctuationToEndForBuiltIn(
-        line: CharSequence,
-        preserveSpans: Boolean
-    ): CharSequence {
-        if (line.isEmpty()) return line
-        val hasCr = line[line.length - 1] == '\r'
-        val end0 = if (hasCr) line.length - 1 else line.length
-        if (end0 == 0) return line
-
-        var end = 0
-        while (end < end0 && line[end] in ARABIC_MOBILE_RTL_PUNCTUATION) end++
-        if (end == 0) return line
-
-        val out: Appendable =
-            if (preserveSpans) SpannableStringBuilder() else StringBuilder(end0)
-        out.append(line.subSequence(end, end0))
-            .append(line.subSequence(0, end))
-        if (hasCr) out.append('\r')
-        return finishBuilder(out)
-    }
-
-    private fun mirrorPunctuationArabic(c: Char): Char = when (c) {
-        '(' -> ')'
-        ')' -> '('
-        '[' -> ']'
-        ']' -> '['
-        '{' -> '}'
-        '}' -> '{'
-        '<' -> '>'
-        '>' -> '<'
-        '«' -> '»'
-        '»' -> '«'
-        '﴿' -> '﴾'
-        '﴾' -> '﴿'
-        '「' -> '」'
-        '」' -> '「'
-        '『' -> '』'
-        '』' -> '『'
-        '【' -> '】'
-        '】' -> '【'
-        '（' -> '）'
-        '）' -> '（'
-        '〈' -> '〉'
-        '〉' -> '〈'
-        '《' -> '》'
-        '》' -> '《'
-        else -> c
-    }
-
-    private fun appendMirroredReversedArabic(
-        out: Appendable,
-        line: CharSequence,
-        from: Int,
-        toExclusive: Int
-    ) {
-        if (from >= toExclusive) return
-
-        fun isNumberSeparator(c: Char) = c == ',' || c == ':' || c == '.' || c == '-'
-
-        val chunks = ArrayList<IntRange>()
-        var i = from
-        while (i < toExclusive) {
-            if (isArabicDigit(line[i])) {
-                val start = i
-                i++
-                while (i < toExclusive) {
-                    if (isArabicDigit(line[i])) {
-                        i++
-                    } else if (
-                        isNumberSeparator(line[i]) &&
-                        i + 1 < toExclusive &&
-                        isArabicDigit(line[i + 1])
-                    ) {
-                        i++
-                    } else {
-                        break
-                    }
-                }
-                chunks.add(start until i)
-            } else {
-                chunks.add(i until i + 1)
-                i++
-            }
-        }
-
-        for (idx in chunks.indices.reversed()) {
-            val range = chunks[idx]
-            if (range.last - range.first + 1 > 1) {
-                out.append(line.subSequence(range.first, range.last + 1))
-            } else {
-                val c = line[range.first]
-                val m = mirrorPunctuationArabic(c)
-                if (m != c) out.append(m) else out.append(line.subSequence(range.first, range.first + 1))
-            }
-        }
-    }
-
-    private fun isArabicDigit(c: Char): Boolean {
-        if (c.isDigit()) return true
-        val code = c.code
-        return code in 0x0660..0x0669 || code in 0x06F0..0x06F9
-    }
-
-    private fun isArabicRtlPunctuation(ch: Char, isEnd: Boolean): Boolean {
-        if (isEnd && isArabicDigit(ch)) return false
-        return ch in ARABIC_RTL_PUNCTUATION || ch.isWhitespace()
-    }
-
-    private val ARABIC_PAIR_FAMILIES: List<Pair<Char, Char>> = listOf(
-        '(' to ')', '[' to ']', '{' to '}', '<' to '>',
-        '«' to '»', '﴿' to '﴾',
-        '「' to '」', '『' to '』', '【' to '】', '（' to '）', '〈' to '〉', '《' to '》',
-        '"' to '"', '“' to '”', '‘' to '’'
-    )
-
-    private val ARABIC_RTL_PUNCTUATION = setOf(
-        '-', ')', '(', '"',
-        '{', '}', '[', ']', '<', '>',
-        '﴿', '﴾', '«', '»',
-        '「', '」', '『', '』', '【', '】', '（', '）', '〈', '〉', '《', '》',
-        '、', '，', '！', '？', '：', '；', '“', '”', '‘', '’', '・', '～',
-        '।', '॥'
-    ) + ('0'..'9')
-
-    private val ARABIC_MOBILE_RTL_PUNCTUATION = setOf('-')
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
