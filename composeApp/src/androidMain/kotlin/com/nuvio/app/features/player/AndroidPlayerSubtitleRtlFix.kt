@@ -18,14 +18,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
 
         if (containsArabic(text)) {
-            val isMessy = isMessySubtitle(text, isBuiltInSubtitle)
-            
-            val fixed = if (isMessy) {
-                applyVisualSwapping(text)
-            } else {
-                wrapArabicLines(text)
-            }
-            
+            val fixed = fixArabicText(text, isBuiltInSubtitle)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -84,36 +77,91 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun isMessySubtitle(text: CharSequence, isBuiltInSubtitle: Boolean): Boolean {
-        if (isBuiltInSubtitle) return false
-        
+    private fun fixArabicText(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence {
+        val preserveSpans = text is Spanned
         val lines = text.splitByNewlines()
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-            
-            if (hasMessyLeadingBoundary(trimmed) || hasMessyTrailingBoundary(trimmed)) {
-                return true
+        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
+
+        for (i in lines.indices) {
+            if (i > 0) builder.append('\n')
+            val line = lines[i].stripDirectionalWrap()
+
+            if (line.isEmpty() || !containsArabic(line)) {
+                builder.append(line)
+                continue
             }
+
+            val hasCr = line.lastOrNull() == '\r'
+            val rawCore = if (hasCr) line.subSequence(0, line.length - 1) else line
+
+            if (rawCore.isEmpty()) {
+                if (hasCr) builder.append('\r')
+                continue
+            }
+
+            val isMessy = !isBuiltInSubtitle && isMessyLine(rawCore)
+
+            if (!isMessy) {
+                builder.append('\u200F').append('\u202B').append(rawCore).append('\u202C').append('\u200F')
+            } else {
+                fixMessyArabicLine(rawCore, builder)
+            }
+
+            if (hasCr) builder.append('\r')
         }
-        return false
+        return finishBuilder(builder)
     }
 
-    private fun hasMessyLeadingBoundary(text: CharSequence): Boolean {
+    private fun isMessyLine(rawCore: CharSequence): Boolean {
+        val trimmed = rawCore.trim()
+        if (trimmed.isEmpty()) return false
+
+        val (_, core) = extractDialoguePrefix(trimmed)
+        val cleanCore = core.trim()
+        if (cleanCore.isEmpty()) return false
+
+        val isParenBalanced = countOccurrences(cleanCore, '(') == countOccurrences(cleanCore, ')')
+        val isBracketBalanced = countOccurrences(cleanCore, '[') == countOccurrences(cleanCore, ']')
+        val isQuoteBalanced = countOccurrences(cleanCore, '"') % 2 == 0
+
+        return hasMessyLeadingBoundary(cleanCore, isParenBalanced, isBracketBalanced, isQuoteBalanced) ||
+               hasMessyTrailingBoundary(cleanCore, isParenBalanced, isBracketBalanced, isQuoteBalanced)
+    }
+
+    private fun hasMessyLeadingBoundary(
+        text: CharSequence,
+        isParenBalanced: Boolean,
+        isBracketBalanced: Boolean,
+        isQuoteBalanced: Boolean
+    ): Boolean {
         if (text.isEmpty()) return false
         val firstChar = text.first()
-        
+
         if (firstChar == '-' || firstChar == '—') {
             return false
         }
-        
-        return isBoundaryPunctuation(firstChar)
+
+        if ((firstChar == '(' && isParenBalanced) ||
+            (firstChar == '[' && isBracketBalanced) ||
+            (firstChar == '{' && isParenBalanced) ||
+            (firstChar == '"' && isQuoteBalanced) ||
+            (firstChar == '«' || firstChar == '“')
+        ) {
+            return false
+        }
+
+        return isBoundaryPunctuation(firstChar, isParenBalanced, isBracketBalanced, isQuoteBalanced)
     }
 
-    private fun hasMessyTrailingBoundary(text: CharSequence): Boolean {
+    private fun hasMessyTrailingBoundary(
+        text: CharSequence,
+        isParenBalanced: Boolean,
+        isBracketBalanced: Boolean,
+        isQuoteBalanced: Boolean
+    ): Boolean {
         if (text.isEmpty()) return false
         val lastChar = text.last()
-        
+
         if (lastChar == '.' || lastChar == '؟' || lastChar == '?' || lastChar == '!' || lastChar == '،' || lastChar == ',') {
             if (text.length > 1) {
                 val prevChar = text[text.length - 2]
@@ -123,84 +171,130 @@ internal object AndroidPlayerSubtitleRtlFix {
             }
             return false
         }
-        
-        return isBoundaryPunctuation(lastChar)
-    }
 
-    private fun applyVisualSwapping(text: CharSequence): CharSequence {
-        val preserveSpans = text is Spanned
-        val lines = text.splitByNewlines()
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
-        
-        for (i in lines.indices) {
-            if (i > 0) builder.append('\n')
-            val line = lines[i].stripDirectionalWrap()
-            
-            if (line.isEmpty() || !containsArabic(line)) {
-                builder.append(line)
-                continue
-            }
-            
-            val hasCr = line.lastOrNull() == '\r'
-            val rawCore = if (hasCr) line.subSequence(0, line.length - 1) else line
-            
-            if (rawCore.isEmpty()) {
-                if (hasCr) builder.append('\r')
-                continue
-            }
-            
-            val cleanCore = StringBuilder()
-            var hasQuestionMark = false
-            for (k in 0 until rawCore.length) {
-                val ch = rawCore[k]
-                if (ch == '؟' || ch == '?') {
-                    hasQuestionMark = true
-                } else {
-                    cleanCore.append(ch)
-                }
-            }
-            
-            var start = 0
-            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start])) start++
-            
-            var end = cleanCore.length
-            while (end > start && isBoundaryPunctuation(cleanCore[end - 1])) end--
-            
-            if (start >= end) {
-                builder.append(cleanCore)
-                if (hasQuestionMark) builder.append('؟')
-                if (hasCr) builder.append('\r')
-                continue
-            }
-            
-            val leadingPunc = cleanCore.subSequence(0, start)
-            val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
-            val middleText = cleanCore.subSequence(start, end)
-            
-            for (j in trailingPunc.indices.reversed()) {
-                builder.append(mirrorArabicPunctuation(trailingPunc[j]))
-            }
-            
-            builder.append('\u202B').append(middleText).append('\u202C')
-            
-            for (j in leadingPunc.indices.reversed()) {
-                builder.append(mirrorArabicPunctuation(leadingPunc[j]))
-            }
-            
-            if (hasQuestionMark) {
-                builder.append('؟')
-            }
-            
-            if (hasCr) builder.append('\r')
+        if ((lastChar == ')' && isParenBalanced) ||
+            (lastChar == ']' && isBracketBalanced) ||
+            (lastChar == '}' && isParenBalanced) ||
+            (lastChar == '"' && isQuoteBalanced) ||
+            (lastChar == '»' || lastChar == '”')
+        ) {
+            return false
         }
-        return finishBuilder(builder)
+
+        return isBoundaryPunctuation(lastChar, isParenBalanced, isBracketBalanced, isQuoteBalanced)
     }
 
-    private fun isBoundaryPunctuation(c: Char): Boolean {
-        return c == '"' || c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
+    private fun fixMessyArabicLine(rawCore: CharSequence, builder: Appendable) {
+        val (dialoguePrefix, afterPrefix) = extractDialoguePrefix(rawCore)
+
+        val cleanCore = StringBuilder()
+        var hasQuestionMark = false
+        for (k in 0 until afterPrefix.length) {
+            val ch = afterPrefix[k]
+            if (ch == '؟' || ch == '?') {
+                hasQuestionMark = true
+            } else {
+                cleanCore.append(ch)
+            }
+        }
+
+        val trimmedClean = cleanCore.trim()
+        if (trimmedClean.isEmpty()) {
+            builder.append('\u200F')
+            if (dialoguePrefix.isNotEmpty()) builder.append(dialoguePrefix)
+            builder.append(cleanCore)
+            if (hasQuestionMark) builder.append('؟')
+            builder.append('\u200F')
+            return
+        }
+
+        val isParenBalanced = countOccurrences(cleanCore, '(') == countOccurrences(cleanCore, ')')
+        val isBracketBalanced = countOccurrences(cleanCore, '[') == countOccurrences(cleanCore, ']')
+        val isQuoteBalanced = countOccurrences(cleanCore, '"') % 2 == 0
+
+        val isLeadingMessy = hasMessyLeadingBoundary(cleanCore, isParenBalanced, isBracketBalanced, isQuoteBalanced)
+        val isTrailingMessy = hasMessyTrailingBoundary(cleanCore, isParenBalanced, isBracketBalanced, isQuoteBalanced)
+
+        var start = 0
+        if (isLeadingMessy) {
+            while (start < cleanCore.length && isBoundaryPunctuation(cleanCore[start], isParenBalanced, isBracketBalanced, isQuoteBalanced)) {
+                start++
+            }
+        }
+
+        var end = cleanCore.length
+        if (isTrailingMessy) {
+            while (end > start && isBoundaryPunctuation(cleanCore[end - 1], isParenBalanced, isBracketBalanced, isQuoteBalanced)) {
+                end--
+            }
+        }
+
+        builder.append('\u200F')
+
+        if (start >= end) {
+            if (dialoguePrefix.isNotEmpty()) builder.append(dialoguePrefix)
+            builder.append(cleanCore)
+            if (hasQuestionMark) builder.append('؟')
+            builder.append('\u200F')
+            return
+        }
+
+        val leadingPunc = cleanCore.subSequence(0, start)
+        val trailingPunc = cleanCore.subSequence(end, cleanCore.length)
+        val middleText = cleanCore.subSequence(start, end)
+
+        if (dialoguePrefix.isNotEmpty()) {
+            builder.append(dialoguePrefix)
+        }
+
+        for (j in trailingPunc.indices.reversed()) {
+            builder.append(mirrorArabicPunctuation(trailingPunc[j]))
+        }
+
+        builder.append('\u202B').append(middleText).append('\u202C')
+
+        for (j in leadingPunc.indices.reversed()) {
+            builder.append(mirrorArabicPunctuation(leadingPunc[j]))
+        }
+
+        if (hasQuestionMark) {
+            builder.append('؟')
+        }
+
+        builder.append('\u200F')
+    }
+
+    private fun extractDialoguePrefix(text: CharSequence): Pair<CharSequence, CharSequence> {
+        var i = 0
+        while (i < text.length && text[i].isWhitespace()) {
+            i++
+        }
+        val start = i
+        while (i < text.length && (text[i] == '-' || text[i] == '—')) {
+            i++
+        }
+        if (i > start) {
+            if (i < text.length && text[i] == ' ') {
+                i++
+            }
+            return Pair(text.subSequence(0, i), text.subSequence(i, text.length))
+        }
+        return Pair("", text)
+    }
+
+    private fun isBoundaryPunctuation(
+        c: Char,
+        isParenBalanced: Boolean = false,
+        isBracketBalanced: Boolean = false,
+        isQuoteBalanced: Boolean = false
+    ): Boolean {
+        if (c == '(' || c == ')') return !isParenBalanced
+        if (c == '[' || c == ']') return !isBracketBalanced
+        if (c == '{' || c == '}') return !isParenBalanced
+        if (c == '"') return !isQuoteBalanced
+
+        return c == '\'' || c == '«' || c == '»' || c == '”' || c == '“' ||
                c == '!' || c == '؟' || c == '?' ||
-               c == '-' || c == '—' ||
-               c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
                c == '.' || c == ',' || c == '،' || c == ':' || c == ';' || c == '…' ||
                c.isWhitespace()
     }
@@ -217,29 +311,12 @@ internal object AndroidPlayerSubtitleRtlFix {
         else -> c
     }
 
-    private fun wrapArabicLines(text: CharSequence): CharSequence {
-        val preserveSpans = text is Spanned
-        val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 8)
-        val lines = text.splitByNewlines()
-        for (i in lines.indices) {
-            if (i > 0) builder.append('\n')
-            val line = lines[i].stripDirectionalWrap()
-            if (line.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-            val hasCr = line.lastOrNull() == '\r'
-            val core = if (hasCr) line.subSequence(0, line.length - 1) else line
-            if (core.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-            
-            builder.append('\u200F').append('\u202B').append(core).append('\u202C').append('\u200F')
-            
-            if (hasCr) builder.append('\r')
+    private fun countOccurrences(text: CharSequence, target: Char): Int {
+        var count = 0
+        for (i in 0 until text.length) {
+            if (text[i] == target) count++
         }
-        return finishBuilder(builder)
+        return count
     }
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
