@@ -76,6 +76,7 @@ fun SubtitleStylePanel(
     onAutoSyncCapture: () -> Unit,
     onAutoSyncCueSelected: (SubtitleSyncCue) -> Unit,
     onAutoSyncReload: () -> Unit,
+    onRtlToggle: () -> Unit = {},
 ) {
     val sectionGap = if (isCompact) 12.dp else 16.dp
     var rtlFixEnabled by remember { mutableStateOf(PlayerSubtitleRtlFix.isRtlEnabled) }
@@ -138,6 +139,7 @@ fun SubtitleStylePanel(
                     val nextState = !rtlFixEnabled
                     rtlFixEnabled = nextState
                     PlayerSubtitleRtlFix.isRtlEnabled = nextState
+                    onRtlToggle()
                 },
             )
         }
