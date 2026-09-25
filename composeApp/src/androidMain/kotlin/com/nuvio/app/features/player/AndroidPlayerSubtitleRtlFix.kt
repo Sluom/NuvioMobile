@@ -9,7 +9,12 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.CuesWithTiming
 
-internal object AndroidPlayerSubtitleRtlFix {
+internal object PlayerSubtitleRtlFix {
+
+    // أقصى عدد أحرف بالسطر الواحد قبل ما نقسمه يدويًا، عشان نمنع SubtitleView من تنفيذ
+    // auto-wrap جوا الرمزين RLE/PDF (وهذا اللي يسبب بَق "الشرطة الطايرة" أعلى النص).
+    // رقم تقريبي (heuristic) مستقل عن حجم الخط الفعلي — يمكن تعديله لاحقًا حسب الحاجة.
+    private const val ARABIC_SAFE_LINE_CHARS = 38
 
     fun fixCueText(cue: Cue, isBuiltInSubtitle: Boolean): Cue {
         val text = cue.text ?: return cue
@@ -18,13 +23,7 @@ internal object AndroidPlayerSubtitleRtlFix {
         }
 
         if (containsArabic(text)) {
-            // 1. إذا كان الملف يحتوي مسبقاً على موجهات خفية (ALM أو RLM)، يمر كما هو دون مساس
-            if (hasPreInjectedDirectionalMarks(text)) {
-                return cue
-            }
-
-            // 2. معالجة النصوص العربية الخام (Pure) مع مراعاة الأسطر المعكوسة يدوياً
-            val fixed = fixArabicLinesSmart(text) ?: return cue
+            val fixed = wrapArabicLines(text)
             if (fixed.contentEquals(text)) return cue
             return cue.buildUpon().setText(fixed).build()
         }
@@ -83,127 +82,63 @@ internal object AndroidPlayerSubtitleRtlFix {
         return CuesWithTiming(cues, entry.startTimeUs, durationUs)
     }
 
-    private fun hasPreInjectedDirectionalMarks(text: CharSequence): Boolean {
-        for (i in 0 until text.length) {
-            val c = text[i]
-            if (c == '\u061C' || c == '\u200F') {
-                return true
-            }
-        }
-        return false
-    }
-
-    private fun fixArabicLinesSmart(text: CharSequence): CharSequence? {
+    private fun wrapArabicLines(text: CharSequence): CharSequence {
         val preserveSpans = text is Spanned
         val builder: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(text.length + 16)
         val lines = text.splitByNewlines()
-        var changed = false
-
+        var firstOutputLine = true
         for (i in lines.indices) {
-            if (i > 0) builder.append('\n')
             val line = lines[i].stripDirectionalWrap()
-            if (line.isEmpty()) {
-                builder.append(line)
-                continue
-            }
-
-            val hasCr = line[line.length - 1] == '\r'
+            val hasCr = line.isNotEmpty() && line[line.length - 1] == '\r'
             val core = if (hasCr) line.subSequence(0, line.length - 1) else line
+
             if (core.isEmpty()) {
+                if (!firstOutputLine) builder.append('\n')
                 builder.append(line)
+                firstOutputLine = false
                 continue
             }
 
-            // فحص هل السطر معكوس فيزيائياً مسبقاً من قِبل المترجم (Visual Order)
-            if (isManuallyReversedLine(core)) {
-                builder.append(core)
-                if (hasCr) builder.append('\r')
-                continue
+            // نقسم السطر الطويل عند حدود الكلمات (مسافة) قبل ما نلف كل قطعة بالرمزين —
+            // بهيك الـ auto-wrap ما يلاقي داعي يقطع جوا التغليف.
+            for (segment in splitAtWordBoundaries(core, ARABIC_SAFE_LINE_CHARS)) {
+                if (!firstOutputLine) builder.append('\n')
+                builder.append('\u202B').append(segment).append('\u202C')
+                firstOutputLine = false
             }
-
-            val fixedLine = resolveArabicLineOrder(core, preserveSpans)
-            if (fixedLine !== core && fixedLine.toString() != core.toString()) {
-                changed = true
-            }
-
-            // تغليف السطر البيور بـ \u202B و \u202C لتثبيت اتجاه الفقرة العربي السليم
-            builder.append('\u202B').append(fixedLine).append('\u202C')
             if (hasCr) builder.append('\r')
         }
-
-        if (!changed) return null
         return finishBuilder(builder)
     }
 
-    private fun isManuallyReversedLine(line: CharSequence): Boolean {
-        val trimmed = line.trim()
-        if (trimmed.isEmpty()) return false
+    /**
+     * يقسم [text] لقطع ما تتجاوز [maxChars]، بس عند مسافة (مو نص كلمة أبدًا).
+     * يرجع [text] كما هو (بقطعة وحدة) لو أصلًا أقصر من الحد.
+     */
+    private fun splitAtWordBoundaries(text: CharSequence, maxChars: Int): List<CharSequence> {
+        if (text.length <= maxChars) return listOf(text)
 
-        // 1. انتهاء السطر بشرطة حوارية بعد كلام عربي (شذوذ مقصود من المترجم لخداع مشغلات LTR)
-        if (trimmed.endsWith('-') || trimmed.endsWith('–') || trimmed.endsWith('—')) {
-            return true
-        }
-
-        // 2. بدء السطر برمز ختامي شاذ (استفهام، تعجب، أو أقواس إغلاق مقلوبة)
-        val first = trimmed.first()
-        if (first == '؟' || first == '!' || first == ')' || first == ']' || first == '}') {
-            return true
-        }
-
-        return false
-    }
-
-    private fun resolveArabicLineOrder(line: CharSequence, preserveSpans: Boolean): CharSequence {
-        val len = line.length
-        if (len == 0) return line
-
-        var start = 0
-        while (start < len && isArabicBoundaryPunctuation(line[start])) start++
-
-        var end = len
-        while (end > start && isArabicBoundaryPunctuation(line[end - 1])) end--
-
-        val hasLeadingPunct = start > 0
-        val hasTrailingPunct = end < len
-
-        // أ) تصادم طرفي مزدوج في ملف بيور (مثل: "- انظر!" أو "«نص»،"): تبديل الأطراف فيزيائياً
-        if (hasLeadingPunct && hasTrailingPunct) {
-            val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(len)
-            appendMirroredReversed(out, line, end, len)
-            out.append(line.subSequence(start, end))
-            appendMirroredReversed(out, line, 0, start)
-            return finishBuilder(out)
-        }
-
-        // ب) علامات اقتباس فردية غير مغلقة ممتدة عبر عدة أسطر: نقل الرمز إلى بداية السطر المنطقية
-        if (!hasLeadingPunct && hasTrailingPunct) {
-            val trailingChar = line[len - 1]
-            if (trailingChar == '"' || trailingChar == '”' || trailingChar == '»') {
-                val quoteCount = line.count { it == trailingChar }
-                if (quoteCount % 2 != 0) {
-                    val out: Appendable = if (preserveSpans) SpannableStringBuilder() else StringBuilder(len)
-                    out.append(trailingChar)
-                    out.append(line.subSequence(0, len - 1))
-                    return finishBuilder(out)
+        val segments = mutableListOf<CharSequence>()
+        var segmentStart = 0
+        var lastSpaceIndex = -1
+        var i = 0
+        while (i < text.length) {
+            if (text[i].isWhitespace()) lastSpaceIndex = i
+            if (i - segmentStart >= maxChars) {
+                if (lastSpaceIndex > segmentStart) {
+                    segments.add(text.subSequence(segmentStart, lastSpaceIndex))
+                    segmentStart = lastSpaceIndex + 1
+                    lastSpaceIndex = -1
                 }
+                // لو ما فيه مسافة جوا الحد (كلمة وحدة طويلة جدًا)، نكمل بدون ما نقطع نصها.
             }
+            i++
         }
-
-        // ج) الأسطر الأحادية العادية (تنتهي بنقطة فقط، أو تبدأ بحوار فقط) تبقى كما هي ويضبطها التغليف
-        return line
+        if (segmentStart < text.length) {
+            segments.add(text.subSequence(segmentStart, text.length))
+        }
+        return segments
     }
-
-    private fun isArabicBoundaryPunctuation(c: Char): Boolean =
-        c in ARABIC_BOUNDARY_PUNCTUATION || c.isWhitespace()
-
-    private val ARABIC_BOUNDARY_PUNCTUATION = setOf(
-        '.', ',', '?', '!', '-', ':', ';', '…', ')', '(',
-        '،', '؟', '؛', '«', '»', '“', '”', '"', '\'', '[', ']', '{', '}', '–', '—'
-    )
-
-    // =========================================================================
-    // الدوال الخاصة باللغة العبرية والمعالجة المشتركة
-    // =========================================================================
 
     private fun fixHebrewLines(text: CharSequence, isBuiltInSubtitle: Boolean): CharSequence? {
         val preserveSpans = text is Spanned
@@ -252,14 +187,6 @@ internal object AndroidPlayerSubtitleRtlFix {
     private fun mirrorPunctuation(c: Char): Char = when (c) {
         '(' -> ')'
         ')' -> '('
-        '[' -> ']'
-        ']' -> '['
-        '{' -> '}'
-        '}' -> '{'
-        '«' -> '»'
-        '»' -> '«'
-        '“' -> '”'
-        '”' -> '“'
         else -> c
     }
 
@@ -375,7 +302,7 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private fun isDirectionalMark(c: Char): Boolean =
         c == '\u202A' || c == '\u202B' || c == '\u202C' ||
-            c == '\u200E' || c == '\u200F' || c == '\u061C'
+            c == '\u200E' || c == '\u200F'
 
     private fun CharSequence.splitByNewlines(): List<CharSequence> {
         val result = mutableListOf<CharSequence>()
@@ -451,5 +378,4 @@ internal object AndroidPlayerSubtitleRtlFix {
 
     private val RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(', '\'', '"') + ('0'..'9')
     private val MOBILE_RTL_PUNCTUATION = setOf('.', ',', '?', '!', '-', ':', ';', '…', ')', '(')
-
 }
