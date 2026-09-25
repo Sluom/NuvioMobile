@@ -9,7 +9,8 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.CuesWithTiming
 
-internal object PlayerSubtitleRtlFix {
+// تم تغيير الاسم هنا لحل مشكلة التضارب والاستدعاء
+internal object AndroidPlayerSubtitleRtlFix {
 
     // أقصى عدد أحرف بالسطر الواحد قبل ما نقسمه يدويًا، عشان نمنع SubtitleView من تنفيذ
     // auto-wrap جوا الرمزين RLE/PDF (وهذا اللي يسبب بَق "الشرطة الطايرة" أعلى النص).
@@ -99,8 +100,6 @@ internal object PlayerSubtitleRtlFix {
                 continue
             }
 
-            // نقسم السطر الطويل عند حدود الكلمات (مسافة) قبل ما نلف كل قطعة بالرمزين —
-            // بهيك الـ auto-wrap ما يلاقي داعي يقطع جوا التغليف.
             for (segment in splitAtWordBoundaries(core, ARABIC_SAFE_LINE_CHARS)) {
                 if (!firstOutputLine) builder.append('\n')
                 builder.append('\u202B').append(segment).append('\u202C')
@@ -111,10 +110,6 @@ internal object PlayerSubtitleRtlFix {
         return finishBuilder(builder)
     }
 
-    /**
-     * يقسم [text] لقطع ما تتجاوز [maxChars]، بس عند مسافة (مو نص كلمة أبدًا).
-     * يرجع [text] كما هو (بقطعة وحدة) لو أصلًا أقصر من الحد.
-     */
     private fun splitAtWordBoundaries(text: CharSequence, maxChars: Int): List<CharSequence> {
         if (text.length <= maxChars) return listOf(text)
 
@@ -130,7 +125,6 @@ internal object PlayerSubtitleRtlFix {
                     segmentStart = lastSpaceIndex + 1
                     lastSpaceIndex = -1
                 }
-                // لو ما فيه مسافة جوا الحد (كلمة وحدة طويلة جدًا)، نكمل بدون ما نقطع نصها.
             }
             i++
         }
